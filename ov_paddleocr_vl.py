@@ -478,9 +478,13 @@ class VisionMlpModel():
             pass
 
     def convert_sdpa_ov(self):
-        encoder_model = self.get_model()      
-        inputs_embeds = torch.rand(( 1, 800, 1152), dtype=torch.float32)  
-        image_grid_thw = torch.tensor([[1, 20, 40]], dtype=torch.int32)
+        encoder_model = self.get_model() 
+        # ## 图片大小300x150    
+        # inputs_embeds = torch.rand(( 1, 800, 1152), dtype=torch.float32)  
+        # image_grid_thw = torch.tensor([[1, 20, 40]], dtype=torch.int32)
+        ## 图片大小1200x800
+        inputs_embeds = torch.rand(( 1, 4988, 1152), dtype=torch.float32)  
+        image_grid_thw = torch.tensor([[1, 58, 86]], dtype=torch.int32)
         ov_model = ov.convert_model(
             encoder_model,
             example_input={
@@ -539,15 +543,18 @@ class VisionModel():
         vison_model.eval()
         
         # 准备输入数据
-        pixel_values = torch.rand((1, 800, 3, 14, 14), dtype=torch.float32)
-        # sample_indices = torch.zeros(800, dtype=torch.int64)
+        # ## 图片大小300x150
+        # pixel_values = torch.rand((1, 800, 3, 14, 14), dtype=torch.float32)
+        # image_grid_thw = torch.tensor([[1, 20, 40]], dtype=torch.int32)
+        # cu_seqlens = torch.tensor([0, 800], dtype=torch.int32)
+        # numel = 1 * 20 * 40  # 800
 
-        image_grid_thw = torch.tensor([[1, 20, 40]], dtype=torch.int32)
-        cu_seqlens = torch.tensor([0, 800], dtype=torch.int32)
-        
+        ## 图片大小1200x800
+        pixel_values = torch.rand((1, 4988, 3, 14, 14), dtype=torch.float32)
+        image_grid_thw = torch.tensor([[1, 58, 86]], dtype=torch.int32)
+        cu_seqlens = torch.tensor([0, 4988], dtype=torch.int32)
 
-        numel = 1 * 20 * 40  # 800
-        # position_ids = torch.arange(numel, dtype=torch.int32)
+        numel = 1 * 58 * 86  # 4988
         
         ## config
             # interpolate_pos_encoding: Optional[bool] = True,
