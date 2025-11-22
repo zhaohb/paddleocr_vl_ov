@@ -1153,13 +1153,3 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         response = self.tokenizer.batch_decode(generation_output, skip_special_tokens=True)[0]
         # print("response: ", response)
         return response, None
-        # response = response.split(template.sep)[0].strip()
-        # history.append((question, response))
-        # if return_history:
-        #     return response, history
-        # else:
-        #     query_to_print = query.replace(IMG_CONTEXT_TOKEN, '')
-        #     query_to_print = query_to_print.replace(f'{IMG_START_TOKEN}{IMG_END_TOKEN}', '<image>')
-        #     if verbose:
-        #         print(query_to_print, response)
-        #     return response
