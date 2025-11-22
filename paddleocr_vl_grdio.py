@@ -429,16 +429,16 @@ def process_ocr(image, image_url_or_path, task_type, max_new_tokens, custom_prom
 # 创建Gradio界面
 # 添加异常处理配置，避免响应内容长度错误
 with gr.Blocks(
-    title="PaddleOCR-VL OCR识别系统 v2", 
+    title="PaddleOCR-VL OCR识别系统", 
     theme=gr.themes.Soft(),
     # 添加这些配置来避免响应问题
     analytics_enabled=False,
 ) as demo:
     gr.Markdown(
         """
-        # 🚀 PaddleOCR-VL OCR识别系统 v2
+        # 🚀 PaddleOCR-VL OCR识别系统
         
-        基于OpenVINO的PaddleOCR-VL模型OCR识别界面（使用render_jinja_template）
+        基于OpenVINO的PaddleOCR-VL模型OCR识别系统
         
         ## 使用说明
         1. 首先在"模型设置"中初始化模型
@@ -466,9 +466,9 @@ with gr.Blocks(
                     value="",
                     placeholder="留空使用默认模板，或输入模板文件路径"
                 )
-                llm_int4 = gr.Checkbox(label="LLM INT4压缩", value=False)
-                vision_int8 = gr.Checkbox(label="Vision INT8量化", value=False)
-                llm_int8 = gr.Checkbox(label="LLM INT8量化", value=False)
+                llm_int4 = gr.Checkbox(label="LLM INT4压缩", value=False, interactive=False)
+                vision_int8 = gr.Checkbox(label="Vision INT8量化", value=False, interactive=False)
+                llm_int8 = gr.Checkbox(label="LLM INT8量化", value=False, interactive=False)
                 init_btn = gr.Button("初始化模型", variant="primary")
             with gr.Column():
                 init_status = gr.Textbox(
@@ -608,7 +608,7 @@ if __name__ == "__main__":
     
     try:
         print("=" * 60)
-        print("正在启动PaddleOCR-VL OCR识别系统 v2...")
+        print("正在启动PaddleOCR-VL OCR识别系统...")
         print("=" * 60)
         
         # 查找可用端口

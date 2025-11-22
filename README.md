@@ -1,7 +1,10 @@
 <div style="text-align:center;">
-  <img src="./paddle_arch.jpg" alt="test" width="900" height="400">
+  <img src="./gradio_paddleocr_vl.gif" alt="test" width="900" height="400">
 </div>
 
+<details>
+  <summary>Click here to expand/collapse content</summary>
+  <ul>
 ```text
 ============================================================
 📄 Transformers OCR 识别结果:
@@ -46,3 +49,6 @@ Hardware | NVIDIA | Intel | KUNLUNXIN | Ascend |   |
    - Chat 方法执行时间: 6.068 秒 (6068.08 毫秒)
 ============================================================
 ```
+
+  </ul>
+</details>
