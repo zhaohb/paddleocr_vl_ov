@@ -72,7 +72,6 @@ VideoInput = Union[
 
 
 def make_batched_images(images) -> List[List[ImageInput]]:
-    print("make_batched_images------")
     """
     Accepts images in list or nested list format, and makes a list of images for preprocessing.
 
@@ -100,7 +99,6 @@ def make_batched_images(images) -> List[List[ImageInput]]:
 
 
 def adjust_size(size, patch_size):
-    print("adjust_size------")
     num_patches = size // patch_size
     if num_patches % 2 != 0:  # 如果是奇数，减1
         num_patches -= 1
@@ -108,7 +106,6 @@ def adjust_size(size, patch_size):
 
 
 def make_batched_videos(videos) -> List[VideoInput]:
-    print("make_batched_videos------")
     if (
         isinstance(videos, (list, tuple))
         and isinstance(videos[0], (list, tuple))
@@ -135,7 +132,6 @@ def smart_resize(
     min_pixels: int = 28 * 28 * 130,
     max_pixels: int = 28 * 28 * 1280,
 ):
-    print("smart_resize------")
     """Rescales the image so that the following conditions are met:
 
     1. Both dimensions (height and width) are divisible by 'factor'.
@@ -251,7 +247,6 @@ class PaddleOCRVLImageProcessor(BaseImageProcessor):
         self.do_convert_rgb = do_convert_rgb
 
     def mvit_rescale(self, image: Image.Image, merge_size: int = 2) -> Image.Image:
-        print("mvit_rescale---------")
         try:
             w, h = image.size
         except:
@@ -306,7 +301,6 @@ class PaddleOCRVLImageProcessor(BaseImageProcessor):
         data_format: Optional[ChannelDimension] = ChannelDimension.FIRST,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ):
-        print("_preprocess---------")
         """
         Preprocess an image or batch of images. Copy of the `preprocess` method from `CLIPImageProcessor`.
 
@@ -441,7 +435,6 @@ class PaddleOCRVLImageProcessor(BaseImageProcessor):
         data_format: Optional[ChannelDimension] = ChannelDimension.FIRST,
         input_data_format: Optional[Union[str, ChannelDimension]] = None,
     ):
-        print("preprocess---------")
         """
         Args:
             images (`ImageInput`):
