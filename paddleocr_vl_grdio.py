@@ -1346,18 +1346,21 @@ def process_ocr(image, image_url_or_path, task_type, max_new_tokens, custom_prom
 # 创建Gradio界面
 # 添加异常处理配置，避免响应内容长度错误
 with gr.Blocks(
-    title="PaddleOCR-VL OCR识别系统", 
-    # 添加这些配置来避免响应问题
-    analytics_enabled=False,
-    css="""
-    .pid-display textarea,
-    .pid-display input {
-        color: #111 !important;
-        font-weight: 600;
-        background-color: #f8f9fb;
-    }
-    """
+    title="PaddleOCR-VL OCR识别系统",
+    analytics_enabled=False
 ) as demo:
+    gr.HTML(
+        """
+        <style>
+        #pid_display textarea,
+        #pid_display input {
+            color: #111 !important;
+            font-weight: 600;
+            background-color: #f8f9fb;
+        }
+        </style>
+        """
+    )
     gr.Markdown(
         """
         # 🚀 PaddleOCR-VL OCR识别系统
@@ -1411,7 +1414,7 @@ with gr.Blocks(
                     interactive=False,
                     lines=1,
                     max_lines=1,  # 限制最大行数
-                    elem_classes=["pid-display"]
+                    elem_id="pid_display"
                 )
     
     with gr.Tab("OCR识别"):
