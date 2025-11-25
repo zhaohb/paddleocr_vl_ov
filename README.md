@@ -1,5 +1,5 @@
 <div style="text-align:center;">
-  <img src="./gradio_paddleocr_vl.gif" alt="test" width="900" height="400">
+  <img src="./gradio_paddleocr_vl.gif" alt="test" width="、1000" height="600">
 </div>
 
 <details>
