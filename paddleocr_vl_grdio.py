@@ -611,7 +611,7 @@ def unload_model():
         return f"❌ 卸载模型失败: {str(e)}\n\n详细信息:\n{error_detail}", "错误"
 
 def convert_latex_format(text):
-    """
+    r"""
     将LaTeX格式转换为Gradio Markdown可识别的格式
     - \[...\] -> $$...$$
     - \(...\) -> $...$
@@ -1347,9 +1347,16 @@ def process_ocr(image, image_url_or_path, task_type, max_new_tokens, custom_prom
 # 添加异常处理配置，避免响应内容长度错误
 with gr.Blocks(
     title="PaddleOCR-VL OCR识别系统", 
-    theme=gr.themes.Soft(),
     # 添加这些配置来避免响应问题
     analytics_enabled=False,
+    css="""
+    .pid-display textarea,
+    .pid-display input {
+        color: #111 !important;
+        font-weight: 600;
+        background-color: #f8f9fb;
+    }
+    """
 ) as demo:
     gr.Markdown(
         """
@@ -1396,8 +1403,7 @@ with gr.Blocks(
                     value="等待初始化...",
                     interactive=False,
                     lines=5,
-                    max_lines=5,  # 限制最大行数，避免内容累积
-                    show_copy_button=False  # 禁用复制按钮，减少内存占用
+                    max_lines=5  # 限制最大行数，避免内容累积
                 )
                 process_id_display = gr.Textbox(
                     label="进程ID",
@@ -1405,7 +1411,7 @@ with gr.Blocks(
                     interactive=False,
                     lines=1,
                     max_lines=1,  # 限制最大行数
-                    show_copy_button=False
+                    elem_classes=["pid-display"]
                 )
     
     with gr.Tab("OCR识别"):
@@ -1499,7 +1505,7 @@ with gr.Blocks(
             ### 4. 自动可视化功能
             - **LaTeX公式**: 系统会自动检测识别结果中的数学公式并渲染
               - 支持块级公式（`$$...$$`）和行内公式（`$...$`）
-              - 自动转换 `\[...\]` 格式为 `$$...$$` 格式
+              - 自动转换 `\\[...\\]` 格式为 `$$...$$` 格式
             - **表格**: 系统会自动识别表格数据并格式化为Markdown表格显示
               - 自动识别表格格式并转换为Markdown表格
               - 支持年份表格等特殊格式的自动识别和格式化

@@ -178,13 +178,13 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例用法:
-  python torch_ov_test.py --model_path ./PaddleOCR-VL --ov_model_path ./ov_paddleocr_vl_model
-  python torch_ov_test.py --model_path ./PaddleOCR-VL --ov_model_path ./ov_paddleocr_vl_model --image_path ./test.jpg --task table
+  python torch_ov_test.py --pretrained_model_path ./PaddleOCR-VL --ov_model_path ./ov_paddleocr_vl_model
+  python torch_ov_test.py --pretrained_model_path ./PaddleOCR-VL --ov_model_path ./ov_paddleocr_vl_model --image_path ./test.jpg --task table
         """
     )
     
     parser.add_argument(
-        "--model_path",
+        "--pretrained_model_path",
         type=str,
         default="./PaddleOCR-VL",
         help="Transformers模型路径 (默认: ./PaddleOCR-VL)"
@@ -231,7 +231,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     main(
-        model_path=args.model_path,
+        pretrained_model_path=args.pretrained_model_path,
         ov_model_path=args.ov_model_path,
         image_path=args.image_path,
         task=args.task,
