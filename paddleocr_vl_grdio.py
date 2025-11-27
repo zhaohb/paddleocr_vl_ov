@@ -34,6 +34,7 @@ init_process = None  # 初始化进程对象
 init_process_pid = None  # 初始化进程ID
 init_status_queue = None  # 用于进程间通信的队列
 init_params = None  # 保存初始化参数
+_accumulated_status_messages = []  # 累积的状态消息，用于保存所有验证步骤信息
 
 # 任务提示词
 PROMPTS = {
@@ -243,6 +244,10 @@ def initialize_model(ov_model_path="./ov_paddleocr_vl_model",
             )
         )
         
+        # 开始新的验证时，清空之前的累积消息
+        global _accumulated_status_messages
+        _accumulated_status_messages = []
+        
         init_process.start()
         init_process_pid = init_process.pid
         init_status_queue = status_queue
@@ -336,8 +341,9 @@ def check_init_status():
     检查初始化进程的状态
     返回当前状态信息和进程ID
     优化：使用缓存避免重复创建相同内容，减少内存占用
+    验证通过的消息（包含✅）会一直保存，不会被刷新
     """
-    global init_process, init_process_pid, init_status_queue, _last_status_cache
+    global init_process, init_process_pid, init_status_queue, _last_status_cache, _accumulated_status_messages
     
     try:
         # 如果没有进程，返回缓存的状态（避免频繁创建新字符串）
@@ -373,29 +379,43 @@ def check_init_status():
         start_time = time.time()
         timeout = 0.1  # 100ms超时
         
-        # 先读取所有消息，然后只保留最新的（避免队列累积）
-        all_messages = []
+        # 先读取队列中的新消息，追加到累积列表中
+        new_messages = []
         try:
             while not init_status_queue.empty():
                 try:
                     msg = init_status_queue.get_nowait()
                     if msg:
-                        all_messages.append(str(msg))
+                        msg_str = str(msg)
+                        # 验证通过的消息（包含✅）需要永久保存
+                        if '✅' in msg_str or '❌' in msg_str:
+                            # 重要消息：追加到累积列表
+                            if len(msg_str) > 200:
+                                msg_str = msg_str[:200] + "..."
+                            _accumulated_status_messages.append(msg_str)
+                        new_messages.append(msg_str)
                 except Exception:
                     break
         except Exception:
             pass
         
-        # 只保留最新的消息，丢弃旧的（防止内存累积）
-        if len(all_messages) > max_messages:
-            all_messages = all_messages[-max_messages:]
+        # 使用累积的消息列表，但限制最大数量避免内存溢出
+        max_accumulated = 50  # 最多保存50条累积消息
+        if len(_accumulated_status_messages) > max_accumulated:
+            # 保留最近的50条消息（保留验证通过的消息）
+            _accumulated_status_messages = _accumulated_status_messages[-max_accumulated:]
         
-        # 处理消息，限制长度
-        for msg in all_messages:
-            if len(msg) > 200:  # 限制单条消息最大200字符
-                msg = msg[:200] + "..."
-            status_messages.append(msg)
-            message_count += 1
+        # 组合累积消息和新消息
+        status_messages = _accumulated_status_messages.copy()
+        
+        # 添加新的非重复消息（非验证通过的消息）
+        for msg in new_messages:
+            if '✅' not in msg and '❌' not in msg:  # 非验证消息
+                if len(msg) > 200:
+                    msg = msg[:200] + "..."
+                if msg not in status_messages:
+                    status_messages.append(msg)
+                    message_count += 1
         
         # 检查进程是否还在运行
         try:
@@ -527,8 +547,10 @@ def unload_model():
         # 6. 清理参数
         init_params = None
         
-        # 7. 清理状态缓存
+        # 7. 清理状态缓存和累积消息
         _last_status_cache = {"text": "", "pid": "", "timestamp": 0}
+        global _accumulated_status_messages
+        _accumulated_status_messages = []  # 清空累积的状态消息
         
         # 8. 清理Gradio相关资源
         try:
