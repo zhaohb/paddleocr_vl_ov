@@ -46,10 +46,11 @@ python ov_model_convert.py \
 
 ```bash
 python torch_ov_test.py \
-  --pretrained_model_path ..\test\PaddleOCR-VL \
+  --pretrained_model_path ..\test\PaddleOCR-VL  \
   --ov_model_path ..\test\ov_paddleocr_vl_model \
-  --image_path ./paddle_arch.jpg \
-  --task ocr
+  --image_path test_images\chart\chart1.png \
+  --task chart  \
+  --ov_device GPU
 ```
 
 Sample comparison output:
