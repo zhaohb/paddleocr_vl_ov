@@ -25,7 +25,7 @@ PROMPTS = {
 chat_template = '{%- if not add_generation_prompt is defined -%}\n    {%- set add_generation_prompt = true -%}\n{%- endif -%}\n{%- if not cls_token is defined -%}\n    {%- set cls_token = "<|begin_of_sentence|>" -%}\n{%- endif -%}\n{%- if not eos_token is defined -%}\n    {%- set eos_token = "</s>" -%}\n{%- endif -%}\n{%- if not image_token is defined -%}\n    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}\n{%- endif -%}\n{{- cls_token -}}\n{%- for message in messages -%}\n    {%- if message["role"] == "user" -%}\n        {{- "User: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "image" -%}\n                {{ image_token }}\n            {%- endif -%}\n        {%- endfor -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ "\\n" -}}\n    {%- elif message["role"] == "assistant" -%}\n        {{- "Assistant: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ eos_token -}}\n    {%- elif message["role"] == "system" -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] + "\\n" }}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{- "Assistant: " -}}\n{%- endif -%}\n'
 
 
-def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task, device=DEVICE, ov_device="GPU"):
+def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task, device=DEVICE, ov_device="GPU", run_torch=True):
     """主函数：执行Transformers和OpenVINO模型的OCR识别对比测试"""
     
     # 加载和预处理图像
@@ -42,43 +42,44 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
     ]
 
     # ========== Transformers模型测试 ==========
-    print("\n" + "="*60)
-    print("🔄 正在加载Transformers模型...")
-    print("="*60)
-    
-    model = AutoModelForCausalLM.from_pretrained(
-        pretrained_model_path, trust_remote_code=True, torch_dtype=torch.bfloat16
-    ).to(device).eval()
-    processor = AutoProcessor.from_pretrained(pretrained_model_path, trust_remote_code=True)
+    if run_torch:
+        print("\n" + "="*60)
+        print("🔄 正在加载Transformers模型...")
+        print("="*60)
+        
+        model = AutoModelForCausalLM.from_pretrained(
+            pretrained_model_path, trust_remote_code=True, torch_dtype=torch.bfloat16
+        ).to(device).eval()
+        processor = AutoProcessor.from_pretrained(pretrained_model_path, trust_remote_code=True)
 
-    inputs = processor.apply_chat_template(
-        messages, 
-        tokenize=True, 
-        add_generation_prompt=True, 	
-        return_dict=True,
-        return_tensors="pt"
-    ).to(device)
+        inputs = processor.apply_chat_template(
+            messages, 
+            tokenize=True, 
+            add_generation_prompt=True, 	
+            return_dict=True,
+            return_tensors="pt"
+        ).to(device)
 
-    start_time = time.perf_counter()
-    outputs = model.generate(**inputs, max_new_tokens=1024, use_cache=True)
-    generate_time = time.perf_counter() - start_time
+        start_time = time.perf_counter()
+        outputs = model.generate(**inputs, max_new_tokens=1024, use_cache=True)
+        generate_time = time.perf_counter() - start_time
 
-    start_time = time.perf_counter()
-    outputs = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-    decode_time = time.perf_counter() - start_time
+        start_time = time.perf_counter()
+        outputs = processor.batch_decode(outputs, skip_special_tokens=True)[0]
+        decode_time = time.perf_counter() - start_time
 
-    total_time = generate_time + decode_time
+        total_time = generate_time + decode_time
 
-    print("\n" + "="*60)
-    print(f"📄 {device} Transformers {task} 识别结果:")
-    print("="*60)
-    print(outputs)
-    print("="*60)
-    print(f"\n⏱️  执行时间统计:")
-    print(f"   - 生成时间 (generate): {generate_time:.3f} 秒 ({generate_time*1000:.2f} 毫秒)")
-    print(f"   - 解码时间 (decode):   {decode_time:.3f} 秒 ({decode_time*1000:.2f} 毫秒)")
-    print(f"   - 总时间:              {total_time:.3f} 秒 ({total_time*1000:.2f} 毫秒)")
-    print("="*60 + "\n")
+        print("\n" + "="*60)
+        print(f"📄 {device} Transformers {task} 识别结果:")
+        print("="*60)
+        print(outputs)
+        print("="*60)
+        print(f"\n⏱️  执行时间统计:")
+        print(f"   - 生成时间 (generate): {generate_time:.3f} 秒 ({generate_time*1000:.2f} 毫秒)")
+        print(f"   - 解码时间 (decode):   {decode_time:.3f} 秒 ({decode_time*1000:.2f} 毫秒)")
+        print(f"   - 总时间:              {total_time:.3f} 秒 ({total_time*1000:.2f} 毫秒)")
+        print("="*60 + "\n")
 
     # ========== OpenVINO模型测试 ==========
     print("\n" + "="*60)
@@ -180,6 +181,7 @@ if __name__ == "__main__":
 示例用法:
   python torch_ov_test.py --pretrained_model_path ./PaddleOCR-VL --ov_model_path ./ov_paddleocr_vl_model
   python torch_ov_test.py --pretrained_model_path ./PaddleOCR-VL --ov_model_path ./ov_paddleocr_vl_model --image_path ./test.jpg --task table
+  python torch_ov_test.py --ov_model_path ./ov_paddleocr_vl_model --image_path ./test.jpg --skip_torch
         """
     )
     
@@ -228,6 +230,12 @@ if __name__ == "__main__":
         help="OpenVINO模型运行设备 (默认: GPU)"
     )
     
+    parser.add_argument(
+        "--skip_torch",
+        action="store_true",
+        help="跳过Transformers模型测试，仅执行OpenVINO模型测试 (默认: False，即执行Transformers测试)"
+    )
+    
     args = parser.parse_args()
     
     main(
@@ -236,5 +244,6 @@ if __name__ == "__main__":
         image_path=args.image_path,
         task=args.task,
         device=args.device,
-        ov_device=args.ov_device
+        ov_device=args.ov_device,
+        run_torch=not args.skip_torch
     )

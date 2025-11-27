@@ -2,17 +2,38 @@
 
 ![PaddleOCR-VL Demo](./gradio_paddleocr_vl.gif)
 
-This repo demonstrates how to convert the [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL) model to OpenVINO IR, validate parity between the original PyTorch model and OpenVINO, and launch an interactive Gradio demo.
+This repository demonstrates how to convert the [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL) model to OpenVINO IR, validate parity between the original PyTorch model and OpenVINO, and launch an interactive Gradio demo.
 
----
+## Table of Contents
 
-## Update Notes
-### 2025/11/25
-1. Paddleocr-VL model supports using openvino to accelerate the inference process. Currently only verified on windows.
-2. LLM testing shows that enabling INT4 compression is not recommended—it tends to produce incorrect results.
-3. **Device Support**: Currently, only GPU and CPU devices are supported. NPU execution is not supported and will result in runtime errors. 
+- [Features](#features)
+- [Important Notes](#important-notes)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Usage](#usage)
+- [Demo](#demo)
+- [Command Line Arguments](#command-line-arguments)
+- [License](#license)
+- [Citation](#citation)
 
-## Running Guide
+## Features
+
+- ✅ Convert PaddleOCR-VL model to OpenVINO IR format
+- ✅ Validate accuracy parity between PyTorch and OpenVINO models
+- ✅ Interactive Gradio demo for OCR, Table, Chart, and Formula recognition
+- ✅ Support for both GPU and CPU inference
+
+## Important Notes
+
+> **📅 Last Updated: 2025/11/25**
+
+1. **Platform Support**: Currently only verified on Windows
+2. **INT4 Compression**: Not recommended - may produce incorrect results
+3. **Device Support**: 
+   - ✅ Supported: GPU and CPU
+   - ❌ Not Supported: NPU (will result in runtime errors)
+
+## Installation
 
 ### Environment Setup
 
@@ -21,18 +42,39 @@ conda create -n paddleocr_vl_ov python=3.12
 conda activate paddleocr_vl_ov
 pip install -r requirements.txt
 ```
-*Replace the Python version above if needed. The `requirements.txt` shipped in this repo already pins the versions verified for both Torch and OpenVINO pipelines.*
 
-### 1. Convert to OpenVINO IR
+> **Note**: Replace the Python version above if needed. The `requirements.txt` shipped in this repo already pins the versions verified for both Torch and OpenVINO pipelines.
 
-#### 1.1 Replace the Hugging Face modeling file
+## Quick Start
+
+### Step 1: Get the OpenVINO IR Model
+
+#### Option 1: Download Pre-converted Model (Recommended) ⭐
+
+If you don't want to convert the model manually, you can directly download the pre-converted OpenVINO IR model from [ModelScope](https://www.modelscope.cn/models/zhaohb/PaddleOCR-Vl-OV).
+
+**Using ModelScope SDK:**
+```bash
+pip install modelscope
+python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PaddleOCR-Vl-OV')"
+```
+
+**Or using git clone:**
+```bash
+git clone https://www.modelscope.cn/zhaohb/PaddleOCR-Vl-OV.git
+```
+
+#### Option 2: Convert to OpenVINO IR Manually
+
+**Step 1.1**: Replace the Hugging Face modeling file
+
 Use the optimized implementation from this repo to overwrite the file inside the model you downloaded from Hugging Face:
 
 ```bash
-cp modeling_paddleocr_vl.py <原始PaddleOCR-VL预训练模型路径>/modeling_paddleocr_vl.py
+cp modeling_paddleocr_vl.py <PaddleOCR-VL预训练模型路径>/modeling_paddleocr_vl.py
 ```
 
-#### 1.2 Run the conversion script
+**Step 1.2**: Run the conversion script
 
 ```bash
 python ov_model_convert.py \
@@ -40,20 +82,38 @@ python ov_model_convert.py \
   --ov_model_path ..\test\ov_paddleocr_vl_model
 ```
 
----
+## Usage
 
-### 2. Verify Torch vs. OpenVINO outputs
+### Step 2: Verify Torch vs. OpenVINO Outputs
+
+Compare the outputs from both PyTorch and OpenVINO models:
 
 ```bash
 python torch_ov_test.py \
-  --pretrained_model_path ..\test\PaddleOCR-VL  \
+  --pretrained_model_path ..\test\PaddleOCR-VL \
   --ov_model_path ..\test\ov_paddleocr_vl_model \
   --image_path test_images\chart\chart1.png \
-  --task chart  \
+  --task chart \
   --ov_device GPU
 ```
 
-Sample comparison output:
+**Available task types:**
+- `ocr` - OCR text recognition
+- `table` - Table recognition
+- `chart` - Chart recognition
+- `formula` - Formula recognition
+
+**Run OpenVINO inference only (skip PyTorch):**
+
+```bash
+python torch_ov_test.py \
+  --ov_model_path ..\test\ov_paddleocr_vl_model \
+  --image_path test_images\chart\chart1.png \
+  --task chart \
+  --skip_torch
+```
+
+**Sample comparison output:**
 
 ```text
 ============================================================
@@ -120,12 +180,36 @@ Quarter | mom change | existing home take rate
 ============================================================
 ```
 
----
+## Demo
 
-### 3. Launch the Gradio demo
+### Step 3: Launch the Gradio Demo
+
+Start the interactive Gradio demo:
 
 ```bash
 python paddleocr_vl_grdio.py
 ```
 
-This starts an interactive UI where you can initialize the OpenVINO model, upload images, and inspect OCR/LaTeX/Table results with automatic visualization.
+This launches an interactive web UI where you can:
+- Initialize the OpenVINO model
+- Upload images for processing
+- Inspect OCR/Table/Chart/Formula recognition results
+- View automatic visualizations
+
+---
+
+## Command Line Arguments
+
+### `torch_ov_test.py` Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--pretrained_model_path` | str | `./PaddleOCR-VL` | Path to the PyTorch model |
+| `--ov_model_path` | str | `./ov_paddleocr_vl_model` | Path to the OpenVINO IR model |
+| `--image_path` | str | `./paddle_arch.jpg` | Path to the test image |
+| `--task` | str | `ocr` | Task type: `ocr`, `table`, `chart`, or `formula` |
+| `--device` | str | `cpu` | PyTorch device: `cpu` or `cuda` |
+| `--ov_device` | str | `GPU` | OpenVINO device: `CPU` or `GPU` |
+| `--skip_torch` | flag | `False` | Skip PyTorch model testing (OpenVINO only) |
+
+---
