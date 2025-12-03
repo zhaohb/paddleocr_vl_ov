@@ -4,9 +4,7 @@ import openvino as ov
 import time
 import argparse
 from transformers import AutoModelForCausalLM, AutoProcessor
-from transformers.utils.chat_template_utils import render_jinja_template
 from ov_paddleocr_vl import OVPaddleOCRVLForCausalLM
-from image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 
 # ---- Settings ----
 image_path = "./paddle_arch.jpg"
