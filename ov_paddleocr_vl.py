@@ -599,7 +599,7 @@ class VisionModel():
         
 
 class PaddleOCR_VL_OV:
-    def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_int4_compress=False, vision_int8_quant=False):
+    def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_compress=False, vision_int8_quant=False):
 
         if model is None and pretrained_model_path:        
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -614,7 +614,7 @@ class PaddleOCR_VL_OV:
             self.model = model
             self.tokenizer = tokenizer
 
-        self.int4_compress = llm_int4_compress
+        self.int4_compress = llm_compress
         self.int8_quant = vision_int8_quant
         self.vision_model = VisionModel(model=self.model, ov_model_path=ov_model_path, device=device, int8_quant=self.int8_quant)
         self.vision_mlp_model = VisionMlpModel(model=self.model, ov_model_path=ov_model_path, device=device)
@@ -636,7 +636,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         core=None,
         ov_model_path=None,
         device='CPU',
-        llm_int4_compress=False, 
+        llm_compress=False, 
         vision_int8_quant=False, 
         llm_int8_quant=False,
         llm_infer_list=[],
@@ -645,33 +645,38 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         self.ov_model_path = ov_model_path
         self.core = core
         self.ov_device = device
-        self.llm_int4_compress = llm_int4_compress
+        self.llm_compress = llm_compress
         self.vision_int8_quant = vision_int8_quant
         self.llm_int8_quant = llm_int8_quant
 
         ov_config = {
-            "DYNAMIC_QUANTIZATION_GROUP_SIZE": "128",  #32
+            "DYNAMIC_QUANTIZATION_GROUP_SIZE": "64",  #32
             "PERFORMANCE_HINT": "LATENCY",
             "NUM_STREAMS": "1",
             "CACHE_DIR": "",
+            'INFERENCE_PRECISION_HINT': 'f16',
         }
 
-        if llm_int4_compress:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful_int4.xml"))
+        if llm_compress:
+            # Due to 4Bit compress with accuracy drop, temp use 8Bit compress model here
+            self.llm_model_path = f"{ov_model_path}/llm_stateful_int8.xml"
+            print("[OV] llm 8 bit compress model loading")
         else:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful.xml"))
+            self.llm_model_path = f"{ov_model_path}/llm_stateful.xml"
+            print("[OV] llm fp16 model loading")
         if llm_int8_quant:
-            self.llm_compiled_model = core.compile_model(self.llm_model, device, config = ov_config)
+            self.llm_compiled_model = core.compile_model(self.llm_model_path, device, config = ov_config)
+            print("[OV] llm dynamic int8 quantization g128")
         else:
-            self.llm_compiled_model = core.compile_model(self.llm_model, device)
+            self.llm_compiled_model = core.compile_model(self.llm_model_path, device)
             
         self.llm_request = self.llm_compiled_model.create_infer_request()
 
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_model.inputs)}
-        self.output_names = {idx: key for idx, key in enumerate(self.llm_model.outputs)}
-        self.key_value_input_names = [key for key in list(self.input_names) if key not in ["beam_idx", "inputs_embeds", "attention_mask", "position_ids"]]
-        self.key_value_output_names = [key for key in list(self.output_names)[1:]]
-        self.stateful = len(self.key_value_input_names) == 0
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_compiled_model.inputs)}
+        # self.output_names = {idx: key for idx, key in enumerate(self.llm_model.outputs)}
+        # self.key_value_input_names = [key for key in list(self.input_names) if key not in ["beam_idx", "inputs_embeds", "attention_mask", "position_ids"]]
+        # self.key_value_output_names = [key for key in list(self.output_names)[1:]]
+        # self.stateful = len(self.key_value_input_names) == 0
         # self.compiled_model = core.compile_model(self.model, device, config = {'INFERENCE_PRECISION_HINT': 'f32'})
 
         self.config = AutoConfig.from_pretrained(ov_model_path, trust_remote_code=True)
@@ -699,16 +704,19 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
     def vision_model_init(self):
         if self.vision_int8_quant:
-            self.vision_encoder_model = self.core.read_model(Path(f"{self.ov_model_path}/vision_int8.xml"))
+            self.vision_encoder_model_path = f"{self.ov_model_path}/vision_int8_q.xml"
+            print("[OV] vision int8 quantization model loading")
+            # self.vision_encoder_model_path = f"{self.ov_model_path}/vision_int8.xml"
+            # print("[OV] vision embedding 8 bit compress model loading")
         else:
-            self.vision_encoder_model = self.core.read_model(Path(f"{self.ov_model_path}/vision.xml"))
-        # self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model, self.ov_device, config = {'INFERENCE_PRECISION_HINT': 'f32'})
-        self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model, self.ov_device)
+            self.vision_encoder_model_path = f"{self.ov_model_path}/vision.xml"
+            print("[OV] vision fp16 model loading")
 
+        self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model_path, self.ov_device)
         self.vision_encoder_request = self.vision_encoder_compiled_model.create_infer_request()
 
-        self.vision_mlp_model = self.core.read_model(Path(f"{self.ov_model_path}/vision_mlp.xml"))
-        self.vision_mlp_compiled_model = self.core.compile_model(self.vision_mlp_model, self.ov_device)
+        # self.vision_mlp_model = self.core.read_model(Path(f"{self.ov_model_path}/vision_mlp.xml"))
+        self.vision_mlp_compiled_model = self.core.compile_model(f"{self.ov_model_path}/vision_mlp.xml", self.ov_device)
         self.vision_mlp_request = self.vision_mlp_compiled_model.create_infer_request()
 
         # self.vision_pre_process = Preprocess()
@@ -1107,9 +1115,13 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
     # }
     def chat(self, input_ids=None, attention_mask=None, pixel_values=None, image_grid_thw=None, generation_config=None,
              verbose=False):
-            
+        start_time = time.perf_counter()
         inputs_embeds = self.llm_embd_run(input_ids)
+        llm_embd_time = time.perf_counter() - start_time
+
+        start_time = time.perf_counter()
         image_embeds = self.vision_model(pixel_values, image_grid_thw)
+        image_embeds_time = time.perf_counter() - start_time
 
         #image_token_id : 100295 video_token_id : 101307
         n_image_tokens = (input_ids == 100295).sum().item()
@@ -1160,13 +1172,19 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         self.rope_deltas = rope_deltas
 
         # breakpoint()
+        start_time = time.perf_counter()
         generation_output = self.generate(
              inputs_embeds=inputs_embeds,
              attention_mask=attention_mask,
              position_ids=position_ids,
             **generation_config
         )
+        generate_time = time.perf_counter() - start_time
         # print("generation_output: ", generation_output)
         response = self.tokenizer.batch_decode(generation_output, skip_special_tokens=True)[0]
         # print("response: ", response)
+
+        print(f"   -    llm_embd_time: {llm_embd_time:.3f} 秒 ({llm_embd_time*1000:.2f} 毫秒)")
+        print(f"   -    image_embeds_time: {image_embeds_time:.3f} 秒 ({image_embeds_time*1000:.2f} 毫秒)")
+        print(f"   -    generate_time: {generate_time:.3f} 秒 ({generate_time*1000:.2f} 毫秒)")
         return response, None
