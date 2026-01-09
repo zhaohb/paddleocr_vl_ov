@@ -1,216 +1,284 @@
-# PaddleOCR-VL + OpenVINO
+# PaddleOCR-VL OpenVINO Pipeline
 
-![PaddleOCR-VL Demo](./gradio_paddleocr_vl.gif)
+A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, supporting document layout detection and Vision Language Model (VLM) inference. Features automatic model downloading for out-of-the-box usage.
 
-This repository demonstrates how to convert the [PaddleOCR-VL](https://huggingface.co/PaddlePaddle/PaddleOCR-VL) model to OpenVINO IR, validate parity between the original PyTorch model and OpenVINO, and launch an interactive Gradio demo.
-
-## Table of Contents
+## 📋 Table of Contents
 
 - [Features](#features)
-- [Important Notes](#important-notes)
+- [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
-- [Demo](#demo)
-- [Command Line Arguments](#command-line-arguments)
-- [License](#license)
-- [Citation](#citation)
+- [API Documentation](#api-documentation)
+- [Model Download](#model-download)
+- [Contact](#contact)
 
-## Features
+## ✨ Features
 
-- ✅ Convert PaddleOCR-VL model to OpenVINO IR format
-- ✅ Validate accuracy parity between PyTorch and OpenVINO models
-- ✅ Interactive Gradio demo for OCR, Table, Chart, and Formula recognition
-- ✅ Support for both GPU and CPU inference
+- ✅ **Complete Document Understanding Pipeline**
+  - Document layout detection (PP-DocLayoutV2)
+  - Vision Language Model (VLM) inference
+  - Support for multiple document element recognition (text, tables, charts, formulas, etc.)
 
-## Important Notes
+- ✅ **OpenVINO-based Inference**
+  - Support for multiple devices: CPU, GPU, NPU, etc.
+  - High-performance inference acceleration
+  - Memory optimization
 
-> **📅 Last Updated: 2025/11/25**
+- ✅ **Automatic Model Download**
+  - Automatic model download from ModelScope
+  - Intelligent model path detection and validation
+  - Ready to use out of the box, no manual model download required
 
-1. **OS Support**: Currently only verified on Windows
-2. **INT4 Compression**: Not recommended - may produce incorrect results
-3. **Device Support**: 
-   - ✅ Supported: GPU and CPU
-   - ❌ Not Supported: NPU (will result in runtime errors)
+- ✅ **Compatible with PaddleX**
+  - Fully compatible with PaddleX's preprocessing and post-processing logic
+  - Support for layout block merging and filtering
+  - Support for Markdown output format
 
-## Installation
+- ✅ **Flexible Device Configuration**
+  - Independent device configuration for layout detection and VLM models
+  - Support for mixed device deployment (e.g., NPU for layout detection, GPU for VLM)
 
-### Environment Setup
+## 📁 Project Structure
 
-```bash
-conda create -n paddleocr_vl_ov python=3.12
-conda activate paddleocr_vl_ov
-pip install -r requirements.txt
-pip install --pre openvino==2025.4.0rc3 openvino-tokenizers==2025.4.0.0rc3 openvino-genai==2025.4.0.0rc3 --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
+```
+paddleocr_vl_ov/
+├── paddleocr_vl/              # VLM model related code
+│   ├── ov_paddleocr_vl.py     # OpenVINO VLM model implementation
+│   ├── image_processing_paddleocr_vl.py  # Image preprocessing
+│   ├── modeling_paddleocr_vl.py          # Model definition
+│   └── README.md              # VLM model documentation
+├── paddleocr_vl_pipeline/     # Pipeline implementation
+│   └── ov_paddleocr_vl_pipeline.py  # Main Pipeline class
+├── pp_doclayoutv2/           # Layout detection related code
+│   └── ov_pp_layoutv2_infer.py  # Layout detection inference
+├── ov_pipeline_test.py      # Test script
+├── requirements.txt         # Dependencies list
+└── README.md               # This file
 ```
 
-> **Note**: Replace the Python version above if needed. The `requirements.txt` shipped in this repo already pins the versions verified for both Torch and OpenVINO pipelines.
+## 🔧 Installation
 
-## Quick Start
+### Requirements
 
-### Step 1: Get the OpenVINO IR Model
+- Python 3.8+
+- OpenVINO 2025.4+
+- CUDA (optional, for GPU inference)
 
-#### Option 1: Download Pre-converted Model (Recommended) ⭐
+### Installation Steps
 
-If you don't want to convert the model manually, you can directly download the pre-converted OpenVINO IR model from [ModelScope](https://www.modelscope.cn/models/zhaohb/PaddleOCR-Vl-OV).
+1. **Clone the repository** (if applicable)
 
-**Using ModelScope SDK:**
 ```bash
+git clone <repository_url>
+cd paddleocr_vl_ov
+```
+
+2. **Install dependencies**
+
+```bash
+pip install -r requirements.txt
+```
+
+3. **Install OpenVINO**
+
+```bash
+pip install openvino==2025.4.1
+```
+
+## 🚀 Quick Start
+
+### Simplest Usage (Automatic Model Download)
+
+```python
+from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+
+# Initialize (automatic model download)
+pipeline = PaddleOCRVL(
+    layout_model_path=None,  # Automatically download layout detection model
+    vlm_model_path=None,      # Automatically download VLM model
+    vlm_device="GPU", 
+    layout_device="GPU",
+)
+
+# Predict
+print("Starting recognition...")
+output = pipeline.predict("./test_images/paddleocr_vl_demo.png")  
+
+# Process results
+for res in output:
+    res.print()
+    res.save_to_json(save_path="output")
+    res.save_to_markdown(save_path="output")
+```
+
+**It's that simple!** Models will be automatically downloaded from ModelScope on first run, and cached models will be used directly on subsequent runs.
+
+## 📖 Usage
+
+### Method 1: Fully Automatic Download (Recommended)
+
+When model paths are set to `None`, models will be automatically downloaded from ModelScope:
+
+```python
+from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+
+pipeline = PaddleOCRVL(
+    layout_model_path=None,  # Automatic download
+    vlm_model_path=None,     # Automatic download
+    vlm_device="GPU", 
+    layout_device="GPU",
+)
+```
+
+### Method 2: Use Existing Models (No Download)
+
+If models already exist, use them directly:
+
+```python
+pipeline = PaddleOCRVL(
+    layout_model_path="C:/path/to/existing/model.xml",
+    vlm_model_path="C:/path/to/existing/vlm_model",
+    vlm_device="GPU", 
+    layout_device="NPU",
+)
+```
+
+### Complete Example
+
+```python
+from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+
+# Initialize Pipeline
+pipeline = PaddleOCRVL(
+    layout_model_path=None,  # Automatically download layout detection model
+    vlm_model_path=None,     # Automatically download VLM model
+    vlm_device="GPU",        # Use GPU for VLM model
+    layout_device="GPU",     # Use GPU for layout detection model
+)
+
+# Execute prediction
+print("Starting recognition...")
+output = pipeline.predict("./test_images/paddleocr_vl_demo.png")  
+
+# Process results
+for res in output:
+    # Print result summary
+    res.print()
+    
+    # Save JSON format results
+    res.save_to_json(save_path="output")
+    
+    # Save Markdown format results
+    res.save_to_markdown(save_path="output")
+```
+
+## 📚 API Documentation
+
+### `PaddleOCRVL` Class
+
+#### Initialization Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `layout_model_path` | `Optional[str]` | `None` | Layout detection model path (.xml file), automatically downloads if `None` |
+| `vlm_model_path` | `Optional[str]` | `None` | VLM model path (directory containing vision.xml, llm_stateful.xml, etc.), automatically downloads if `None` |
+| `vlm_device` | `str` | `"CPU"` | VLM model inference device: `"CPU"`, `"GPU"`, `"AUTO"` |
+| `layout_device` | `str` | `"NPU"` | Layout detection model inference device: `"CPU"`, `"GPU"`, `"NPU"`, `"AUTO"` |
+| `use_layout_detection` | `bool` | `True` | Whether to use layout detection |
+| `use_chart_recognition` | `bool` | `False` | Whether to use chart recognition |
+| `merge_layout_blocks` | `bool` | `True` | Whether to merge layout blocks |
+| `markdown_ignore_labels` | `List[str]` | `None` | List of labels to ignore in Markdown output |
+| `cache_dir` | `Optional[str]` | `None` | ModelScope model cache directory, uses default cache directory if `None` |
+
+#### `predict` Method
+
+```python
+def predict(
+    self,
+    input: Union[str, List[str], np.ndarray, List[np.ndarray]],
+    use_layout_detection: Optional[bool] = None,
+    layout_threshold: Optional[Union[float, dict]] = None,
+    layout_nms: Optional[bool] = None,
+    layout_unclip_ratio: Optional[Union[float, tuple]] = None,
+    layout_merge_bboxes_mode: Optional[str] = None,
+    max_new_tokens: Optional[int] = None,
+    **kwargs,
+) -> List[PaddleOCRVLResult]
+```
+
+**Parameter Description:**
+
+- `input`: Input image (file path, list of paths, numpy array, or list of numpy arrays)
+- `use_layout_detection`: Whether to use layout detection (overrides initialization setting)
+- `layout_threshold`: Layout detection threshold (float or dict, dict format: `{category_id: threshold}`)
+- `layout_nms`: Whether to use NMS for deduplication
+- `layout_unclip_ratio`: Layout box expansion ratio (float or tuple `(w_ratio, h_ratio)`)
+- `layout_merge_bboxes_mode`: Layout box merge mode (`"union"`, `"large"`, `"small"`)
+- `max_new_tokens`: Maximum number of tokens to generate for VLM
+
+**Return Value:**
+
+Returns `List[PaddleOCRVLResult]`, each result contains:
+- `parsing_res_list`: Parsing result list (`PaddleOCRVLBlock` objects)
+- `input_path`: Input image path
+- `json`: JSON format result
+- `img`: Visualization image
+- `markdown`: Markdown format result
+
+#### `PaddleOCRVLResult` Class Methods
+
+- `print()`: Print result summary
+- `save_to_json(save_path)`: Save JSON format results
+- `save_to_img(save_path)`: Save visualization image
+- `save_to_markdown(save_path)`: Save Markdown format results
+
+## 📥 Model Download
+
+### Automatic Download (Recommended)
+
+Models will be automatically downloaded from ModelScope on first use, no manual operation required.
+
+### Manual Download
+
+If you need to manually download models, you can use the following methods:
+
+#### PP-DocLayoutV2 Layout Detection Model
+
+**ModelScope**: [PP-DocLayoutV2-ov](https://www.modelscope.cn/models/zhaohb/PP-DocLayoutV2-ov)
+
+```bash
+# Using ModelScope SDK
+pip install modelscope
+python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PP-DocLayoutV2-ov')"
+```
+
+#### PaddleOCR-VL VLM Model
+
+**ModelScope**: [PaddleOCR-Vl-OV](https://www.modelscope.cn/models/zhaohb/PaddleOCR-Vl-OV)
+
+```bash
+# Using ModelScope SDK
 pip install modelscope
 python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PaddleOCR-Vl-OV')"
 ```
 
-**Or using git clone:**
-```bash
-git clone https://www.modelscope.cn/zhaohb/PaddleOCR-Vl-OV.git
+### Model Caching
+
+Downloaded models are cached in ModelScope's default cache directory (usually `~/.cache/modelscope/hub`). Subsequent runs will directly use cached models without re-downloading.
+
+You can specify a custom cache directory using the `cache_dir` parameter:
+
+```python
+pipeline = PaddleOCRVL(
+    layout_model_path=None,
+    vlm_model_path=None,
+    cache_dir="./models_cache",  # Custom cache directory
+    vlm_device="GPU",
+    layout_device="GPU",
+)
 ```
 
-#### Option 2: Convert to OpenVINO IR Manually
+## 📧 Contact
 
-**Step 1.1**: Replace the Hugging Face modeling file
-
-Use the optimized implementation from this repo to overwrite the file inside the model you downloaded from Hugging Face:
-
-```bash
-cp modeling_paddleocr_vl.py <PaddleOCR-VL预训练模型路径>/modeling_paddleocr_vl.py
-```
-
-**Step 1.2**: Run the conversion script
-
-```bash
-python ov_model_convert.py \
-  --pretrained_model_path ..\test\PaddleOCR-VL \
-  --ov_model_path ..\test\ov_paddleocr_vl_model
-```
-
-## Usage
-
-### Step 2: Verify Torch vs. OpenVINO Outputs
-
-Compare the outputs from both PyTorch and OpenVINO models:
-
-```bash
-python torch_ov_test.py \
-  --pretrained_model_path ..\test\PaddleOCR-VL \
-  --ov_model_path ..\test\ov_paddleocr_vl_model \
-  --image_path test_images\chart\chart1.png \
-  --task chart \
-  --ov_device GPU
-```
-
-**Available task types:**
-- `ocr` - OCR text recognition
-- `table` - Table recognition
-- `chart` - Chart recognition
-- `formula` - Formula recognition
-
-**Run OpenVINO inference only (skip PyTorch):**
-
-```bash
-python torch_ov_test.py \
-  --ov_model_path ..\test\ov_paddleocr_vl_model \
-  --image_path test_images\chart\chart1.png \
-  --task chart \
-  --skip_torch
-```
-
-**Sample comparison output:**
-
-```text
-============================================================
-🔄 正在加载Transformers模型...
-============================================================
-Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
-
-============================================================
-📄 cpu Transformers chart 识别结果:
-============================================================
-User: Chart Recognition:
-Assistant: Quarter | mom change | existing home take rate
-1Q22 | -0.04% | 1.64%
-2Q22 | -0.2% | 1.41%
-3Q22 | 0.2% | 1.59%
-4Q22 | -0.1% | 1.5%
-1Q23 | -0.1% | 1.38%
-2Q23 | 0.0% | 1.41%
-3Q23 | 0.0% | 1.44%
-4Q23 | -0.1% | 1.29%
-1Q24 | -0.03% | 1.26%
-2Q24 | 0.02% | 1.29%
-3Q24 | 0.0% | 1.3%
-4Q24 | -0.1% | 1.2%
-1Q25 | -0.01% | 1.18%
-============================================================
-
-⏱️  执行时间统计:
-   - 生成时间 (generate): 39.446 秒 (39445.81 毫秒)
-   - 解码时间 (decode):   0.000 秒 (0.40 毫秒)
-   - 总时间:              39.446 秒 (39446.20 毫秒)
-============================================================
-
-
-============================================================
-🔄 正在加载OpenVINO模型...
-============================================================
-OpenVINO version 
- 2026.0.0-20478-59bb607be25
-
-
-
-============================================================
-📄 GPU openVINO chart 识别结果:
-============================================================
-Quarter | mom change | existing home take rate
-1Q22 | -0.04% | 1.64%
-2Q22 | -0.2% | 1.41%
-3Q22 | 0.2% | 1.59%
-4Q22 | -0.1% | 1.5%
-1Q23 | -0.1% | 1.38%
-2Q23 | 0.0% | 1.41%
-3Q23 | 0.0% | 1.44%
-4Q23 | -0.1% | 1.29%
-1Q24 | -0.03% | 1.26%
-2Q24 | 0.02% | 1.29%
-3Q24 | 0.0% | 1.3%
-4Q24 | -0.1% | 1.2%
-1Q25 | -0.01% | 1.18%
-============================================================
-
-⏱️  执行时间统计:
-   - Chat 方法执行时间: 5.684 秒 (5684.29 毫秒)
-============================================================
-```
-
-## Demo
-
-### Step 3: Launch the Gradio Demo
-
-Start the interactive Gradio demo:
-
-```bash
-python paddleocr_vl_grdio.py
-```
-
-This launches an interactive web UI where you can:
-- Initialize the OpenVINO model
-- Upload images for processing
-- Inspect OCR/Table/Chart/Formula recognition results
-- View automatic visualizations
-
----
-
-## Command Line Arguments
-
-### `torch_ov_test.py` Arguments
-
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--pretrained_model_path` | str | `./PaddleOCR-VL` | Path to the PyTorch model |
-| `--ov_model_path` | str | `./ov_paddleocr_vl_model` | Path to the OpenVINO IR model |
-| `--image_path` | str | `./paddle_arch.jpg` | Path to the test image |
-| `--task` | str | `ocr` | Task type: `ocr`, `table`, `chart`, or `formula` |
-| `--device` | str | `cpu` | PyTorch device: `cpu` or `cuda` |
-| `--ov_device` | str | `GPU` | OpenVINO device: `CPU` or `GPU` |
-| `--skip_torch` | flag | `False` | Skip PyTorch model testing (OpenVINO only) |
-
----
+For questions or suggestions, please submit an Issue or Pull Request.

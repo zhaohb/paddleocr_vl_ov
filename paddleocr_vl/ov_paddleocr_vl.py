@@ -2,6 +2,9 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torchvision.transforms as T
+import os
+# 禁用 transformers 的模型源连接检查（使用本地模型时不需要）
+os.environ.setdefault("DISABLE_MODEL_SOURCE_CHECK", "True")
 from transformers import AutoModelForCausalLM,AutoTokenizer
 from transformers import AutoConfig
 from typing import List
@@ -36,7 +39,7 @@ import nncf
 import time
 import warnings
 from transformers.utils.chat_template_utils import render_jinja_template
-from image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
+from .image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 
 
 def model_has_state(ov_model: ov.Model):
