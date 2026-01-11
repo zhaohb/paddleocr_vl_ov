@@ -61,9 +61,8 @@ paddleocr_vl_ov/
 
 ### Requirements
 
-- Python 3.8+
+- Python 3.10+
 - OpenVINO 2025.4+
-- CUDA (optional, for GPU inference)
 
 ### Installation Steps
 
