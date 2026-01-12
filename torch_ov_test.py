@@ -105,8 +105,9 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
         ov_model_path=ov_model_path, 
         device=ov_device, 
         llm_int4_compress=False, 
-        vision_int8_quant=False, 
-        llm_int8_quant=False, 
+        vision_int8_quant=True, 
+        llm_int8_compress=False, 
+        llm_int8_quant=True, 
         llm_infer_list=llm_infer_list, 
         vision_infer=vision_infer
     )

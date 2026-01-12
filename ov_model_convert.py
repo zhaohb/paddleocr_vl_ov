@@ -22,6 +22,9 @@ def parse_args():
   # 使用GPU设备并启用INT4压缩（更小的模型，但可能影响精度）
   python ov_model_convert.py --device gpu --llm_int4_compress --vision_int8_quant
 
+  # 同时启用INT4和INT8压缩（生成两个压缩模型）
+  python ov_model_convert.py --device gpu --llm_int4_compress --llm_int8_compress --vision_int8_quant
+
   # 完整参数示例（INT8压缩）
   python ov_model_convert.py \\
     --pretrained_model_path ./PaddleOCR-VL \\
@@ -36,6 +39,15 @@ def parse_args():
     --ov_model_path ./ov_paddleocr_vl_model \\
     --device gpu \\
     --llm_int4_compress \\
+    --vision_int8_quant
+
+  # 完整参数示例（同时启用INT4和INT8压缩）
+  python ov_model_convert.py \\
+    --pretrained_model_path ./PaddleOCR-VL \\
+    --ov_model_path ./ov_paddleocr_vl_model \\
+    --device gpu \\
+    --llm_int4_compress \\
+    --llm_int8_compress \\
     --vision_int8_quant
 
 注意:
@@ -64,16 +76,15 @@ def parse_args():
         choices=["cpu", "gpu"],
         help="OpenVINO编译使用的设备 (默认: %(default)s)",
     )
-    llm_compress_group = parser.add_mutually_exclusive_group()
-    llm_compress_group.add_argument(
+    parser.add_argument(
         "--llm_int4_compress",
         action="store_true",
         help="启用LLM部分的INT4压缩（可大幅减少模型大小，但可能影响精度）",
     )
-    llm_compress_group.add_argument(
+    parser.add_argument(
         "--llm_int8_compress",
         action="store_true",
-        help="启用LLM部分的INT8压缩（可减少模型大小，但可能影响精度）",
+        help="启用LLM部分的INT8压缩（可减少模型大小，但可能影响精度）。可与 --llm_int4_compress 同时使用以生成两个压缩模型",
     )
     parser.add_argument(
         "--vision_int8_quant",
@@ -87,7 +98,9 @@ def main():
     args = parse_args()
     
     # 显示压缩选项信息
-    if args.llm_int4_compress:
+    if args.llm_int4_compress and args.llm_int8_compress:
+        print("ℹ️  同时启用 INT4 和 INT8 压缩（将生成两个压缩模型）")
+    elif args.llm_int4_compress:
         print("ℹ️  使用 INT4 压缩（模型更小，但可能影响精度）")
     elif args.llm_int8_compress:
         print("ℹ️  使用 INT8 压缩（平衡模型大小和精度）")
