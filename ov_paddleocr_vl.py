@@ -35,6 +35,8 @@ import nncf
 
 import time
 import warnings
+from transformers.utils.chat_template_utils import render_jinja_template
+from image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 
 
 def model_has_state(ov_model: ov.Model):
@@ -1126,13 +1128,136 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
             return position_ids, mrope_position_deltas
     
-    # generation_config = {
-    #     "max_new_tokens": max_new_tokens,
-    #     "do_sample": False,
-    # }
-    def chat(self, input_ids=None, attention_mask=None, pixel_values=None, image_grid_thw=None, generation_config=None,
-             verbose=False):
-            
+    def preprocess(
+        self,
+        messages: List[dict],
+        chat_template: Optional[str] = None,
+        add_generation_prompt: bool = True,
+        image_processor_config: Optional[dict] = None,
+    ) -> dict:
+        """
+        Preprocess messages and images for the model.
+        
+        Args:
+            messages: List of conversation messages. Each message should have the format:
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": PIL.Image},
+                            {"type": "text", "text": "..."}
+                        ]
+                    }
+                ]
+            chat_template: Optional Jinja2 chat template string. If None, will use the default template.
+            add_generation_prompt: Whether to add generation prompt to the template.
+            image_processor_config: Optional dictionary with image processor configuration.
+                Default values:
+                {
+                    "resample": 3,
+                    "rescale_factor": 0.00392156862745098,
+                    "image_mean": [0.5, 0.5, 0.5],
+                    "image_std": [0.5, 0.5, 0.5],
+                    "min_pixels": 147384,
+                    "max_pixels": 2822400,
+                    "patch_size": 14,
+                    "temporal_patch_size": 1,
+                    "merge_size": 2
+                }
+        
+        Returns:
+            Dictionary containing:
+                - "text_inputs": Tokenized text inputs from tokenizer
+                - "images_info": Processed image information dictionary
+        """
+        # Use default chat template if not provided
+        if chat_template is None:
+            chat_template = '{%- if not add_generation_prompt is defined -%}\n    {%- set add_generation_prompt = true -%}\n{%- endif -%}\n{%- if not cls_token is defined -%}\n    {%- set cls_token = "<|begin_of_sentence|>" -%}\n{%- endif -%}\n{%- if not eos_token is defined -%}\n    {%- set eos_token = "</s>" -%}\n{%- endif -%}\n{%- if not image_token is defined -%}\n    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}\n{%- endif -%}\n{{- cls_token -}}\n{%- for message in messages -%}\n    {%- if message["role"] == "user" -%}\n        {{- "User: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "image" -%}\n                {{ image_token }}\n            {%- endif -%}\n        {%- endfor -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ "\\n" -}}\n    {%- elif message["role"] == "assistant" -%}\n        {{- "Assistant: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ eos_token -}}\n    {%- elif message["role"] == "system" -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] + "\\n" }}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{- "Assistant: " -}}\n{%- endif -%}\n'
+        
+        # Render Jinja template to get text with placeholders
+        text, generation_indices = render_jinja_template(
+            conversations=[messages],
+            chat_template=chat_template,
+            add_generation_prompt=add_generation_prompt,
+            return_tensors="pt",
+        )
+        
+        # Default image processor configuration
+        default_image_processor_config = {
+            "resample": 3,
+            "rescale_factor": 0.00392156862745098,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "min_pixels": 147384,
+            "max_pixels": 2822400,
+            "patch_size": 14,
+            "temporal_patch_size": 1,
+            "merge_size": 2
+        }
+        
+        # Merge user config with defaults
+        if image_processor_config:
+            default_image_processor_config.update(image_processor_config)
+        
+        # Create image processor
+        image_processor = PaddleOCRVLImageProcessor(**default_image_processor_config)
+        
+        # Extract images from messages
+        images = []
+        for message in messages:
+            if "content" in message:
+                for content in message["content"]:
+                    if content.get("type") == "image" and "image" in content:
+                        images.append(content["image"])
+        
+        # Process images
+        images_info = image_processor(images=images, return_tensors="pt")
+        
+        # Replace image placeholders in text
+        if not isinstance(text, list):
+            text = [text]
+        
+        index = 0
+        for i in range(len(text)):
+            while "<|IMAGE_PLACEHOLDER|>" in text[i]:
+                text[i] = text[i].replace(
+                    "<|IMAGE_PLACEHOLDER|>",
+                    "<|placeholder|>"
+                    * (
+                        images_info['image_grid_thw'][index].prod()
+                        // 2
+                        // 2
+                    ),
+                    1,
+                )
+                index += 1
+            text[i] = text[i].replace("<|placeholder|>", "<|IMAGE_PLACEHOLDER|>")
+        
+        # Tokenize text
+        text_inputs = self.tokenizer(text, return_tensors="pt")
+        
+        return {
+            "text_inputs": text_inputs,
+            "images_info": images_info,
+        }
+
+    def chat(self, messages=None, chat_template=None, generation_config=None, image_processor_config=None, verbose=False):
+        # Handle default generation_config
+        if generation_config is None:
+            generation_config = {
+                "bos_token_id": self.tokenizer.bos_token_id,
+                "eos_token_id": self.tokenizer.eos_token_id,
+                "pad_token_id": self.tokenizer.pad_token_id,
+                "max_new_tokens": 1024,
+                "do_sample": False,
+            }
+        
+        inputs_dict = self.preprocess(messages=messages, chat_template=chat_template, image_processor_config=image_processor_config)
+        input_ids = inputs_dict["text_inputs"]["input_ids"]
+        attention_mask = inputs_dict["text_inputs"]["attention_mask"]
+        pixel_values = inputs_dict["images_info"]["pixel_values"]
+        image_grid_thw = inputs_dict["images_info"]["image_grid_thw"]
+
         inputs_embeds = self.llm_embd_run(input_ids)
         image_embeds = self.vision_model(pixel_values, image_grid_thw)
 

@@ -4,9 +4,7 @@ import openvino as ov
 import time
 import argparse
 from transformers import AutoModelForCausalLM, AutoProcessor
-from transformers.utils.chat_template_utils import render_jinja_template
 from ov_paddleocr_vl import OVPaddleOCRVLForCausalLM
-from image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 
 # ---- Settings ----
 image_path = "./paddle_arch.jpg"
@@ -99,46 +97,6 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
         llm_infer_list=llm_infer_list, 
         vision_infer=vision_infer
     )
-    
-    text, generation_indices = render_jinja_template(
-        conversations=[messages],
-        chat_template=chat_template,
-        add_generation_prompt=True, 	
-        return_tensors="pt",
-    )
-    
-    my_preprocer = PaddleOCRVLImageProcessor(
-        resample=3, 
-        rescale_factor=0.00392156862745098, 
-        image_mean=[0.5, 0.5, 0.5],
-        image_std=[0.5, 0.5, 0.5], 
-        min_pixels=147384,
-        max_pixels=2822400, 
-        patch_size=14, 
-        temporal_patch_size=1, 
-        merge_size=2
-    )
-    images_info = my_preprocer(images=image, return_tensors="pt")
-
-    if not isinstance(text, list):
-        text = [text]
-    index = 0
-    for i in range(len(text)):
-        while "<|IMAGE_PLACEHOLDER|>" in text[i]:
-            text[i] = text[i].replace(
-                "<|IMAGE_PLACEHOLDER|>",
-                "<|placeholder|>"
-                * (
-                    images_info['image_grid_thw'][index].prod()
-                    // 2
-                    // 2
-                ),
-                1,
-            )
-            index += 1
-        text[i] = text[i].replace("<|placeholder|>", "<|IMAGE_PLACEHOLDER|>")
-
-    text_inputs = paddleocr_vl_model.tokenizer(text, return_tensors="pt")
 
     version = ov.get_version()
     print("OpenVINO version \n", version)
@@ -155,10 +113,7 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
     # 统计 chat 方法的执行时间
     start_time = time.perf_counter()
     response, history = paddleocr_vl_model.chat(
-        input_ids=text_inputs["input_ids"], 
-        attention_mask=text_inputs["attention_mask"], 
-        pixel_values=images_info["pixel_values"], 
-        image_grid_thw=images_info["image_grid_thw"], 
+        messages=messages,
         generation_config=generation_config
     )
     chat_time = time.perf_counter() - start_time

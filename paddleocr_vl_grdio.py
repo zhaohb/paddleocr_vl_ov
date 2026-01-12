@@ -1282,9 +1282,6 @@ def process_ocr(image, image_url_or_path, task_type, max_new_tokens, custom_prom
         
         # 准备生成配置
         generation_config = {
-            "bos_token_id": paddleocr_vl_model.tokenizer.bos_token_id,
-            "eos_token_id": paddleocr_vl_model.tokenizer.eos_token_id,
-            "pad_token_id": paddleocr_vl_model.tokenizer.pad_token_id,
             "max_new_tokens": max_new_tokens,
             "do_sample": False,
         }
@@ -1292,10 +1289,7 @@ def process_ocr(image, image_url_or_path, task_type, max_new_tokens, custom_prom
         # 执行OCR识别
         start_time = time.perf_counter()
         response, history = paddleocr_vl_model.chat(
-            input_ids=text_inputs["input_ids"],
-            attention_mask=text_inputs["attention_mask"],
-            pixel_values=images_info["pixel_values"],
-            image_grid_thw=images_info["image_grid_thw"],
+            messages=messages,
             generation_config=generation_config
         )
         elapsed_time = time.perf_counter() - start_time
