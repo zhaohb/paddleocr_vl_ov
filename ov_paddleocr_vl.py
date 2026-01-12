@@ -263,6 +263,7 @@ class LlmStatefulModel():
         device='CPU',
         fp16=False,
         int4_compress=False,
+        int8_compress=False,
     ):
         self.name = "PaddleOCR_VL LLM Model"
         self.model = model
@@ -271,6 +272,7 @@ class LlmStatefulModel():
         self.ov_model_path = ov_model_path
         self.fp16=fp16
         self.int4_compress = int4_compress
+        self.int8_compress = int8_compress
         self.inputs_dict = {}
 
     def get_model(self):
@@ -388,6 +390,7 @@ class LlmStatefulModel():
         self.save_tokenizer(self.tokenizer, self.ov_model_path)
         self.model.config.save_pretrained(self.ov_model_path)
 
+        # 支持 INT4 压缩
         if self.int4_compress:
             compression_configuration = {
                 "mode": nncf.CompressWeightsMode.INT4_SYM,
@@ -396,6 +399,18 @@ class LlmStatefulModel():
             }
             ov_compressed_model = nncf.compress_weights(ov_model, **compression_configuration)
             ov.save_model(ov_compressed_model, Path(f"{self.ov_model_path}/llm_stateful_int4.xml"))
+            print(f"✅ INT4 compressed model saved to {self.ov_model_path}/llm_stateful_int4.xml")
+        
+        # 支持 INT8 压缩
+        if self.int8_compress:
+            compression_configuration = {
+                "mode": nncf.CompressWeightsMode.INT8_SYM,
+                "group_size": 128,
+                "ratio": 1,
+            }
+            ov_compressed_model = nncf.compress_weights(ov_model, **compression_configuration)
+            ov.save_model(ov_compressed_model, Path(f"{self.ov_model_path}/llm_stateful_int8.xml"))
+            print(f"✅ INT8 compressed model saved to {self.ov_model_path}/llm_stateful_int8.xml")
 
 class LlmEmbdModel():
     def __init__(
@@ -599,7 +614,7 @@ class VisionModel():
         
 
 class PaddleOCR_VL_OV:
-    def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_int4_compress=False, vision_int8_quant=False):
+    def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_int4_compress=False, llm_int8_compress=False, vision_int8_quant=False):
 
         if model is None and pretrained_model_path:        
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -615,12 +630,13 @@ class PaddleOCR_VL_OV:
             self.tokenizer = tokenizer
 
         self.int4_compress = llm_int4_compress
+        self.int8_compress = llm_int8_compress
         self.int8_quant = vision_int8_quant
         self.vision_model = VisionModel(model=self.model, ov_model_path=ov_model_path, device=device, int8_quant=self.int8_quant)
         self.vision_mlp_model = VisionMlpModel(model=self.model, ov_model_path=ov_model_path, device=device)
 
         self.llm_embed_model = LlmEmbdModel(model=self.model, ov_model_path=ov_model_path, device=device)
-        self.llm_stateful_model = LlmStatefulModel(model=self.model, tokenizer= self.tokenizer, ov_model_path=ov_model_path, device=device, int4_compress=self.int4_compress)
+        self.llm_stateful_model = LlmStatefulModel(model=self.model, tokenizer= self.tokenizer, ov_model_path=ov_model_path, device=device, int4_compress=self.int4_compress, int8_compress=self.int8_compress)
 
     def export_vision_to_ov(self):
         self.vision_model.convert_sdpa_ov()
@@ -636,16 +652,22 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         core=None,
         ov_model_path=None,
         device='CPU',
-        llm_int4_compress=False, 
+        llm_int4_compress=False,
+        llm_int8_compress=False, 
         vision_int8_quant=False, 
         llm_int8_quant=False,
         llm_infer_list=[],
         vision_infer=[],
     ):
+        # 确保 int4 和 int8 压缩选项互斥
+        if llm_int4_compress and llm_int8_compress:
+            raise ValueError("llm_int4_compress and llm_int8_compress cannot be enabled simultaneously")
+        
         self.ov_model_path = ov_model_path
         self.core = core
         self.ov_device = device
         self.llm_int4_compress = llm_int4_compress
+        self.llm_int8_compress = llm_int8_compress
         self.vision_int8_quant = vision_int8_quant
         self.llm_int8_quant = llm_int8_quant
 
@@ -656,8 +678,11 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             "CACHE_DIR": "",
         }
 
+        # 根据压缩选项加载相应的模型
         if llm_int4_compress:
             self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful_int4.xml"))
+        elif llm_int8_compress:
+            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful_int8.xml"))
         else:
             self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful.xml"))
         if llm_int8_quant:
