@@ -169,6 +169,53 @@ def merge_formula_and_number(formula, formula_number):
     merge_formula = r"{} \tag*{{{}}}".format(formula, formula_number)
     return f"$${merge_formula}$$"
 
+def fix_latex_syntax(text):
+    """
+    修复常见的 LaTeX 语法错误，特别是 VLM 模型生成的错误格式
+    
+    Args:
+        text: 包含 LaTeX 公式的文本
+    
+    Returns:
+        修复后的文本
+    """
+    import re
+    
+    # 修复 \inS, \inR, \inN 等错误（应该是 \in S, \in \mathbb{R}, \in \mathbb{N}）
+    # 匹配模式：\in[A-Z]（如 \inS, \inR, \inN）
+    def fix_in_symbol(match):
+        full_match = match.group(0)
+        letter = full_match[-1]  # 获取最后一个字母
+        
+        # 特殊处理：R -> \mathbb{R}, N -> \mathbb{N}, Z -> \mathbb{Z}, Q -> \mathbb{Q}, C -> \mathbb{C}
+        if letter in ['R', 'N', 'Z', 'Q', 'C']:
+            return f"\\in \\mathbb{{{letter}}}"
+        else:
+            # 其他情况：\inS -> \in S
+            return f"\\in {letter}"
+    
+    # 使用正则表达式查找并替换
+    # 匹配 $...$ 或 $$...$$ 中的内容
+    def fix_in_formula(match):
+        formula_content = match.group(1)
+        # 修复 \in[A-Z] 模式
+        formula_content = re.sub(r'\\in([A-Z])', fix_in_symbol, formula_content)
+        return f"${formula_content}$"
+    
+    # 修复行内公式 $...$
+    text = re.sub(r'\$([^$]+)\$', fix_in_formula, text)
+    
+    # 修复块级公式 $$...$$
+    def fix_in_display_formula(match):
+        formula_content = match.group(1)
+        # 修复 \in[A-Z] 模式
+        formula_content = re.sub(r'\\in([A-Z])', fix_in_symbol, formula_content)
+        return f"$${formula_content}$$"
+    
+    text = re.sub(r'\$\$([^$]+)\$\$', fix_in_display_formula, text)
+    
+    return text
+
 def format_chart2table_func(block):
     """图表转表格格式化"""
     lines_list = block.content.split("\n")
@@ -624,34 +671,58 @@ class PaddleOCRVLResult(dict):
             json.dump(self._to_json(), f, indent=indent, ensure_ascii=ensure_ascii)
         print(f"JSON saved to: {json_path}")
 
-    def save_to_img(self, save_path):
-        """Save the image representation of the result to files."""
-        save_path = Path(save_path)
-        save_path.mkdir(parents=True, exist_ok=True)
-        fn = self._get_input_fn()
+    def save_to_img(self, save_path, *args, **kwargs):
+        """
+        Save the image representation of the result to files.
+        
+        Args:
+            save_path: The path to save the image(s). If the save path does not end with .jpg or .png, 
+                      it appends the input path's stem and suffix to the save path.
+            *args: Additional positional arguments that will be passed to the image writer.
+            **kwargs: Additional keyword arguments that will be passed to the image writer.
+        """
+        import mimetypes
+        
+        def _is_image_file(file_path):
+            mime_type, _ = mimetypes.guess_type(str(file_path))
+            return mime_type is not None and mime_type.startswith("image/")
+        
         img_dict = self._to_img()
-        for key, img in img_dict.items():
-            if img is not None:
-                img_path = save_path / f"{Path(fn).stem}_{key}.jpg"
-                if isinstance(img, Image.Image):
-                    img.save(img_path)
-                elif isinstance(img, np.ndarray):
-                    Image.fromarray(img).save(img_path)
-        print(f"Images saved to: {save_path}")
+        if not _is_image_file(save_path):
+            fn = Path(self._get_input_fn())
+            suffix = fn.suffix if _is_image_file(fn) else ".png"
+            stem = fn.stem
+            base_save_path = Path(save_path)
+            base_save_path.mkdir(parents=True, exist_ok=True)
+            for key in img_dict:
+                if img_dict[key] is not None:
+                    img_path = base_save_path / f"{stem}_{key}{suffix}"
+                    self._save_image(img_path.as_posix(), img_dict[key], *args, **kwargs)
+        else:
+            if len(img_dict) > 1:
+                import logging
+                logging.warning(
+                    f"The result has multiple img files need to be saved. But the `save_path` has been specified as `{save_path}`!"
+                )
+            # 保存第一个非 None 的图片
+            for key, img in img_dict.items():
+                if img is not None:
+                    self._save_image(save_path, img, *args, **kwargs)
+                    break
 
-    def save_to_markdown(self, save_path, pretty=True, show_formula_number=False):
+    def save_to_markdown(self, save_path, pretty=True, show_formula_number=False, *args, **kwargs):
         """
         Save the markdown representation of the result to a file.
-        
-        参考 PaddleX 的实现，确保所有元素（text、image、table 等）都能正确展示。
         
         Args:
             save_path: 保存路径（目录或文件路径）
             pretty: 是否使用 HTML 美化 markdown
             show_formula_number: 是否显示公式编号
+            *args: Additional positional arguments for saving.
+            **kwargs: Additional keyword arguments for saving.
         """
         def _is_markdown_file(file_path) -> bool:
-            """检查文件是否是 markdown 文件"""
+            """Check if a file is a markdown file based on its extension or MIME type."""
             markdown_extensions = {".md", ".markdown", ".mdown", ".mkd"}
             _, ext = os.path.splitext(str(file_path))
             if ext.lower() in markdown_extensions:
@@ -661,57 +732,85 @@ class PaddleOCRVLResult(dict):
             return mime_type == "text/markdown"
         
         import os
-        save_path = Path(save_path)
+        import mimetypes
         
-        # 如果 save_path 不是 markdown 文件，则生成文件名
         if not _is_markdown_file(save_path):
-            fn = self._get_input_fn()
+            fn = Path(self._get_input_fn())
             suffix = fn.suffix if _is_markdown_file(fn) else ".md"
-            stem = Path(fn).stem
-            base_save_path = save_path
-            save_path.mkdir(parents=True, exist_ok=True)
-            md_path = base_save_path / f"{stem}_res{suffix}"
+            stem = fn.stem
+            base_save_path = Path(save_path)
+            save_path = base_save_path / f"{stem}{suffix}"
+            self.save_path = save_path
         else:
-            # 如果 save_path 是文件路径，直接使用
-            md_path = save_path
-            base_save_path = md_path.parent
-            base_save_path.mkdir(parents=True, exist_ok=True)
+            self.save_path = save_path
         
-        # 获取 markdown 信息
-        markdown_info = self._to_markdown(pretty=pretty, show_formula_number=show_formula_number)
+        self._save_data(
+            self._save_markdown_text,
+            self._save_image,
+            self.save_path,
+            self._to_markdown(pretty=pretty, show_formula_number=show_formula_number),
+            *args,
+            **kwargs,
+        )
+    
+    def _save_data(
+        self,
+        save_mkd_func,
+        save_img_func,
+        save_path,
+        data,
+        *args,
+        **kwargs,
+    ):
+        """Internal method to save markdown and image data.
         
-        # 保存图像（参考 PaddleX 的 _save_data 实现）
-        # 图片路径是相对于 base_save_path 的（如 "imgs/img_in_image_box_776_200_1504_685.jpg"）
-        markdown_images = markdown_info.get("markdown_images", {})
-        for img_path, img_data in markdown_images.items():
-            if img_data is not None:
-                # img_path 可能是相对路径（如 "imgs/img_in_image_box_776_200_1504_685.jpg"）
-                # 需要保存到 base_save_path / img_path
-                save_img_path = base_save_path / img_path
-                save_img_path.parent.mkdir(parents=True, exist_ok=True)
-                
-                if isinstance(img_data, Image.Image):
-                    img_data.save(save_img_path)
-                elif isinstance(img_data, np.ndarray):
-                    Image.fromarray(img_data).save(save_img_path)
+        Args:
+            save_mkd_func: Function to save markdown text.
+            save_img_func: Function to save image data.
+            save_path: The base path where the data will be saved.
+            data: The markdown data to save.
+            *args: Additional positional arguments for saving.
+            **kwargs: Additional keyword arguments for saving.
+        """
+        MARKDOWN_SAVE_KEYS = ["markdown_texts"]
+        save_path = Path(save_path)
+        if data is None:
+            return
+        for key, value in data.items():
+            if key in MARKDOWN_SAVE_KEYS:
+                save_mkd_func(save_path.as_posix(), value, *args, **kwargs)
+            if isinstance(value, dict):
+                base_save_path = save_path.parent
+                for img_path, img_data in value.items():
+                    save_img_func(
+                        (base_save_path / img_path).as_posix(),
+                        img_data,
+                        *args,
+                        **kwargs,
+                    )
+    
+    def _save_markdown_text(self, out_path, text, *args, **kwargs):
+        """Save markdown text to file."""
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write(text)
+    
+    def _save_image(self, out_path, img_data, *args, **kwargs):
+        """Save image data to file."""
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(img_data, Image.Image):
+            img_data.save(out_path)
+        elif isinstance(img_data, np.ndarray):
+            Image.fromarray(img_data).save(out_path)
+        else:
+            # 如果 img_data 是其他类型，尝试转换
+            try:
+                if hasattr(img_data, 'save'):
+                    img_data.save(out_path)
                 else:
-                    # 如果 img_data 是其他类型，尝试转换
-                    try:
-                        if hasattr(img_data, 'save'):
-                            img_data.save(save_img_path)
-                        else:
-                            print(f"Warning: Cannot save image of type {type(img_data)}")
-                    except Exception as e:
-                        print(f"Warning: Failed to save image {img_path}: {e}")
-        
-        # 保存 Markdown 文本
-        markdown_texts = markdown_info.get("markdown_texts", "")
-        with open(md_path, 'w', encoding='utf-8') as f:
-            f.write(markdown_texts)
-        
-        print(f"Markdown saved to: {md_path}")
-        if markdown_images:
-            print(f"Saved {len(markdown_images)} images to: {base_save_path / 'imgs'}")
+                    print(f"Warning: Cannot save image of type {type(img_data)}")
+            except Exception as e:
+                print(f"Warning: Failed to save image {out_path}: {e}")
 
     def print(self):
         """Print the result."""
@@ -1076,7 +1175,7 @@ class PaddleOCRVL:
             # 不使用布局检测时，不提取图像
             imgs_in_doc = []
         
-        # 创建 LayoutDetectionResult 对象并调用 to_json 和 to_img（参考 ov_pp_layoutv2_infer.py）
+        # 创建 LayoutDetectionResult 对象并获取 json 和 img
         import os
         layout_det_result_obj = LayoutDetectionResult(
             input_path=os.path.abspath(input_path) if input_path else None,
@@ -1085,8 +1184,6 @@ class PaddleOCRVL:
             input_img=doc_preprocessor_image
         )
         
-        # 调用 to_json 和 to_img
-        layout_det_result_obj.save_to_json(save_path="output")
         layout_det_result_obj.save_to_img(save_path="output")
         
         return {
@@ -1447,6 +1544,9 @@ class PaddleOCRVL:
                         )
                         if block_label == "formula_number":
                             result_str = result_str.replace("$", "")
+                    
+                    # 修复 LaTeX 语法错误（修复 \inS, \inR 等常见错误）
+                    result_str = fix_latex_syntax(result_str)
                     
                     # 处理表格（参考 PaddleX 第 351-357 行）
                     if block_label == "table":

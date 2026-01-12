@@ -19,7 +19,7 @@ pipeline = PaddleOCRVL(
 
 # 预测
 print("开始识别...")
-output = pipeline.predict("./test_images/paddleocr_vl_demo.png")  
+output = pipeline.predict("./test_images/chart1.png")  
 
 # 处理结果
 for res in output:
