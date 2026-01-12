@@ -7,6 +7,10 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,      # 自动下载
     vlm_device="GPU", 
     layout_device="GPU",
+    llm_int4_compress=False,
+    vision_int8_quant=True,
+    llm_int8_compress=True,
+    llm_int8_quant=True,
 )
 
 # # 方式2: 使用本地模型路径（如果路径不存在会自动下载）
@@ -19,7 +23,7 @@ pipeline = PaddleOCRVL(
 
 # 预测
 print("开始识别...")
-output = pipeline.predict("./test_images/chart1.png")  
+output = pipeline.predict("./test_images/doc_test.png")  
 
 # 处理结果
 for res in output:

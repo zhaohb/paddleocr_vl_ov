@@ -19,7 +19,16 @@ os.environ.setdefault("GRADIO_SERVER_NAME", "127.0.0.1")
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
 os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 
-def initialize_pipeline(layout_model_path, vlm_model_path, vlm_device, layout_device):
+def initialize_pipeline(
+    layout_model_path, 
+    vlm_model_path, 
+    vlm_device, 
+    layout_device,
+    llm_int4_compress,
+    vision_int8_quant,
+    llm_int8_compress,
+    llm_int8_quant
+):
     """初始化 Pipeline"""
     global pipeline
     try:
@@ -28,6 +37,10 @@ def initialize_pipeline(layout_model_path, vlm_model_path, vlm_device, layout_de
             vlm_model_path=vlm_model_path if vlm_model_path else None,
             vlm_device=vlm_device,
             layout_device=layout_device,
+            llm_int4_compress=llm_int4_compress,
+            vision_int8_quant=vision_int8_quant,
+            llm_int8_compress=llm_int8_compress,
+            llm_int8_quant=llm_int8_quant,
         )
         return "✅ Pipeline 初始化成功！"
     except Exception as e:
@@ -152,12 +165,55 @@ def create_gradio_interface():
                     value="GPU",
                     label="布局检测推理设备"
                 )
+            
+            with gr.Accordion("量化/压缩设置", open=False):
+                gr.Markdown("""
+                **量化/压缩选项说明**：
+                - **LLM INT4 压缩**：对 LLM 模型进行 INT4 量化压缩，可大幅减少模型大小和内存占用
+                - **Vision INT8 量化**：对视觉模型进行 INT8 量化，平衡精度和性能
+                - **LLM INT8 压缩**：对 LLM 模型进行 INT8 量化压缩
+                - **LLM INT8 量化**：对 LLM 模型进行 INT8 量化
+                
+                ⚠️ **注意**：量化可能会略微降低精度，但可以显著提升推理速度和减少内存占用
+                """)
+                with gr.Row():
+                    llm_int4_compress = gr.Checkbox(
+                        label="LLM INT4 压缩",
+                        value=False,
+                        info="对 LLM 模型进行 INT4 量化压缩"
+                    )
+                    vision_int8_quant = gr.Checkbox(
+                        label="Vision INT8 量化",
+                        value=True,
+                        info="对视觉模型进行 INT8 量化"
+                    )
+                with gr.Row():
+                    llm_int8_compress = gr.Checkbox(
+                        label="LLM INT8 压缩",
+                        value=True,
+                        info="对 LLM 模型进行 INT8 量化压缩"
+                    )
+                    llm_int8_quant = gr.Checkbox(
+                        label="LLM INT8 量化",
+                        value=True,
+                        info="对 LLM 模型进行 INT8 量化"
+                    )
+            
             init_btn = gr.Button("初始化 Pipeline", variant="primary")
             init_status = gr.Textbox(label="初始化状态", interactive=False)
             
             init_btn.click(
                 fn=initialize_pipeline,
-                inputs=[layout_model_path, vlm_model_path, vlm_device, layout_device],
+                inputs=[
+                    layout_model_path, 
+                    vlm_model_path, 
+                    vlm_device, 
+                    layout_device,
+                    llm_int4_compress,
+                    vision_int8_quant,
+                    llm_int8_compress,
+                    llm_int8_quant
+                ],
                 outputs=init_status
             )
         
@@ -236,6 +292,15 @@ def create_gradio_interface():
             - **VLM 模型路径**：PaddleOCR-VL 模型的目录路径，留空则自动从 ModelScope 下载
             - **VLM 推理设备**：选择 VLM 模型运行的设备（CPU/GPU/AUTO）
             - **布局检测推理设备**：选择布局检测模型运行的设备（CPU/GPU/NPU/AUTO）
+            
+            #### 量化/压缩设置
+            
+            - **LLM INT4 压缩**：对 LLM 模型进行 INT4 量化压缩，可大幅减少模型大小和内存占用（默认：False）
+            - **Vision INT8 量化**：对视觉模型进行 INT8 量化，平衡精度和性能（默认：True）
+            - **LLM INT8 压缩**：对 LLM 模型进行 INT8 量化压缩（默认：True）
+            - **LLM INT8 量化**：对 LLM 模型进行 INT8 量化（默认：True）
+            
+            ⚠️ **注意**：量化可能会略微降低精度，但可以显著提升推理速度和减少内存占用。建议根据实际需求调整这些设置。
             
             ### 2. 文档识别
             

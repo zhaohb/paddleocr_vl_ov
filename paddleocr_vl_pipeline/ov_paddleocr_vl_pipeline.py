@@ -848,6 +848,10 @@ class PaddleOCRVL:
         merge_layout_blocks: bool = True,
         markdown_ignore_labels: Optional[List[str]] = None,
         cache_dir: Optional[str] = None,
+        llm_int4_compress: bool = False,
+        vision_int8_quant: bool = True,
+        llm_int8_compress: bool = True,
+        llm_int8_quant: bool = True,
     ):
         """
         初始化 PaddleOCR-VL Pipeline
@@ -902,7 +906,7 @@ class PaddleOCRVL:
             self._load_layout_model()
         
         # 加载 VLM 模型
-        self._load_vlm_model()
+        self._load_vlm_model(llm_int4_compress=llm_int4_compress, vision_int8_quant=vision_int8_quant, llm_int8_compress=llm_int8_compress, llm_int8_quant=llm_int8_quant)
         
         # 不需要单独初始化图像处理器，VLM 模型内部会处理
     
@@ -1019,12 +1023,16 @@ class PaddleOCRVL:
         self.layout_compiled_model = self.core.compile_model(model, self.layout_device)
         self.layout_request = self.layout_compiled_model.create_infer_request()
     
-    def _load_vlm_model(self):
+    def _load_vlm_model(self, llm_int4_compress=False, vision_int8_quant=True, llm_int8_compress=True, llm_int8_quant=True):
         """加载 VLM 模型"""
         self.vlm_model = OVPaddleOCRVLForCausalLM(
             core=self.core,
             ov_model_path=self.vlm_model_path,
             device=self.vlm_device,
+            llm_int4_compress=llm_int4_compress, 
+            vision_int8_quant=vision_int8_quant, 
+            llm_int8_compress=llm_int8_compress, 
+            llm_int8_quant=llm_int8_quant, 
         )
     
     def predict(

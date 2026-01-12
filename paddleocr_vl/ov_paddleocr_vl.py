@@ -2,9 +2,6 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torchvision.transforms as T
-import os
-# 禁用 transformers 的模型源连接检查（使用本地模型时不需要）
-os.environ.setdefault("DISABLE_MODEL_SOURCE_CHECK", "True")
 from transformers import AutoModelForCausalLM,AutoTokenizer
 from transformers import AutoConfig
 from typing import List
@@ -268,6 +265,7 @@ class LlmStatefulModel():
         device='CPU',
         fp16=False,
         int4_compress=False,
+        int8_compress=False,
     ):
         self.name = "PaddleOCR_VL LLM Model"
         self.model = model
@@ -276,6 +274,7 @@ class LlmStatefulModel():
         self.ov_model_path = ov_model_path
         self.fp16=fp16
         self.int4_compress = int4_compress
+        self.int8_compress = int8_compress
         self.inputs_dict = {}
 
     def get_model(self):
@@ -393,14 +392,27 @@ class LlmStatefulModel():
         self.save_tokenizer(self.tokenizer, self.ov_model_path)
         self.model.config.save_pretrained(self.ov_model_path)
 
+        # 支持 INT4 压缩
         if self.int4_compress:
             compression_configuration = {
-                "mode": nncf.CompressWeightsMode.INT4_SYM,
-                "group_size": 128,
-                "ratio": 1,
+                "mode": nncf.CompressWeightsMode.INT4_ASYM,
+                "group_size": 64,
+                "ratio": 0.9,
             }
-            ov_compressed_model = nncf.compress_weights(ov_model, **compression_configuration)
-            ov.save_model(ov_compressed_model, Path(f"{self.ov_model_path}/llm_stateful_int4.xml"))
+            ov_compressed_model_int4 = nncf.compress_weights(ov_model, **compression_configuration)
+            ov.save_model(ov_compressed_model_int4, Path(f"{self.ov_model_path}/llm_stateful_int4.xml"))
+            print(f"✅ INT4 compressed model saved to {self.ov_model_path}/llm_stateful_int4.xml")
+        
+        # 支持 INT8 压缩
+        if self.int8_compress:
+            compression_configuration = {
+                "mode": nncf.CompressWeightsMode.INT8_ASYM,
+                # "group_size": 64,
+                # "ratio": 1,
+            }
+            ov_compressed_model_int8 = nncf.compress_weights(ov_model, **compression_configuration)
+            ov.save_model(ov_compressed_model_int8, Path(f"{self.ov_model_path}/llm_stateful_int8.xml"))
+            print(f"✅ INT8 compressed model saved to {self.ov_model_path}/llm_stateful_int8.xml")
 
 class LlmEmbdModel():
     def __init__(
@@ -519,6 +531,7 @@ class VisionModel():
         device='CPU',
         fp16=False,
         int8_quant=False,
+        tokenizer=None,
     ):
         self.name = "Vision Encoder Model"
         self.model = model
@@ -527,6 +540,8 @@ class VisionModel():
         self.fp16=fp16
         self.inputs_dict = {}
         self.int8_quant = int8_quant
+        self.tokenizer = tokenizer
+        self.vision_pre_process = PaddleOCRVLPreprocessor(tokenizer=self.tokenizer)
 
     def get_model(self):
         return self.model.visual.vision_model
@@ -540,6 +555,169 @@ class VisionModel():
 
     def get_sample_input(self):
             pass
+
+    def get_pil_from_path(self, image_path):
+        """
+        Loads an image from a local file path and converts it to a PIL Image object.
+        
+        Args:
+            image_path: Path to the image file
+            
+        Returns:
+            PIL Image object in RGB format
+        """
+        image = Image.open(image_path)
+        image = image.convert("RGB")
+        image = image.resize((1200, 800), Image.Resampling.LANCZOS)
+        return image
+
+    def collate_fn(self, example, image_column="image_path"):
+        """
+        Preprocesses an example by loading and transforming image data from local file system.
+        Loads the image specified by the path in the image_column.
+        If there is any error during the loading process, returns None.
+        Returns the preprocessed inputs with transformed image data.
+        """
+        assert len(example) == 1
+        example = example[0]
+        image_path = example[image_column]
+        try:
+            image = self.get_pil_from_path(image_path)
+            h, w = image.size
+            if h == 1 or w == 1:
+                return None
+        except Exception as e:
+            print(f"Error loading image {image_path}: {e}")
+            return None
+
+        # Construct messages format expected by PaddleOCRVLPreprocessor.preprocess
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": ""}
+                ]
+            }
+        ]
+        
+        # Call preprocess with proper messages format
+        inputs_dict = self.vision_pre_process.preprocess(messages=messages)
+        
+        # Return the result as a dictionary with images_info
+        return {"images_info": inputs_dict["images_info"]}
+    
+    def prepare_calibration_data(self, dataloader, init_steps):
+        """
+        This function prepares calibration data from a dataloader for a specified number of initialization steps.
+        It iterates over the dataloader, fetching batches and storing the relevant data.
+        """
+        data = []
+        print(f"Fetching {init_steps} samples for the initialization...")
+        for batch in dataloader:
+            if len(data) == init_steps:
+                break
+            if batch is not None:
+                with torch.no_grad():
+                    pixel_values = batch["images_info"]["pixel_values"]
+                    image_grid_thw = batch["images_info"]["image_grid_thw"]
+                    
+                    # Ensure pixel_values has batch dimension [1, N, 3, 14, 14]
+                    original_shape = pixel_values.shape
+                    if pixel_values.dim() == 4:  # Shape: (N, 3, 14, 14)
+                        pixel_values = pixel_values.unsqueeze(0)  # Add batch dimension: [1, N, 3, 14, 14]
+                    elif pixel_values.dim() == 5:
+                        if pixel_values.shape[0] != 1:  # Shape: (B, N, 3, 14, 14) where B != 1
+                            pixel_values = pixel_values[0:1]  # Take only first batch: [1, N, 3, 14, 14]
+                    else:
+                        raise ValueError(f"Unexpected pixel_values shape: {original_shape}, expected 4D or 5D tensor")
+                    
+                    # Verify pixel_values has correct shape [1, N, 3, 14, 14]
+                    if pixel_values.dim() != 5 or pixel_values.shape[0] != 1:
+                        raise ValueError(f"pixel_values must have shape [1, N, 3, 14, 14], got {pixel_values.shape}")
+                    
+                    # Ensure image_grid_thw has batch dimension [1, 3]
+                    original_grid_shape = image_grid_thw.shape
+                    if image_grid_thw.dim() == 1:  # Shape: (3,)
+                        image_grid_thw = image_grid_thw.unsqueeze(0)  # Add batch dimension: [1, 3]
+                    elif image_grid_thw.dim() == 2:
+                        if image_grid_thw.shape[0] != 1:  # Shape: (B, 3) where B != 1
+                            image_grid_thw = image_grid_thw[0:1]  # Take only first batch: [1, 3]
+                    else:
+                        raise ValueError(f"Unexpected image_grid_thw shape: {original_grid_shape}, expected 1D or 2D tensor")
+                    
+                    # Verify image_grid_thw has correct shape [1, 3]
+                    if image_grid_thw.dim() != 2 or image_grid_thw.shape[0] != 1 or image_grid_thw.shape[1] != 3:
+                        raise ValueError(f"image_grid_thw must have shape [1, 3], got {image_grid_thw.shape}")
+                    
+                    # Calculate actual sequence length from pixel_values
+                    actual_seq_len = pixel_values.shape[1]  # Get N from [1, N, 3, 14, 14]
+                    cu_seqlens = torch.tensor([0, actual_seq_len], dtype=torch.int32)
+                    
+                    # Convert to numpy arrays for NNCF (it expects numpy arrays)
+                    # Ensure shapes are correct: [1, N, 3, 14, 14] for pixel_values, [1, 3] for image_grid_thw
+                    pixel_values_np = pixel_values.cpu().numpy()
+                    image_grid_thw_np = image_grid_thw.cpu().numpy()
+                    cu_seqlens_np = cu_seqlens.cpu().numpy()
+                    
+                    # Final verification before adding to data
+                    if pixel_values_np.shape[0] != 1:
+                        raise ValueError(f"pixel_values numpy array must have batch size 1, got shape {pixel_values_np.shape}")
+                    
+                    data.append(
+                        {
+                            "pixel_values": pixel_values_np,
+                            "image_grid_thw": image_grid_thw_np,
+                            "cu_seqlens": cu_seqlens_np
+                        })
+        return data
+
+    def prepare_dataset(self, opt_init_steps=3, max_train_samples=20):
+        """
+        Prepares a vision dataset for quantization using local images from test_images directory.
+        Reads images from subdirectories (ocr, table, chart, formula) in test_images folder.
+        """
+        import os
+        import random
+        
+        # Base directory for test images
+        base_dir = Path(__file__).parent / "test_images"
+        
+        # Collect all image paths from subdirectories
+        image_paths = []
+        for subdir in ["ocr", "table", "chart", "formula"]:
+            subdir_path = base_dir / subdir
+            if subdir_path.exists():
+                for img_file in subdir_path.glob("*.png"):
+                    image_paths.append(str(img_file))
+                for img_file in subdir_path.glob("*.jpg"):
+                    image_paths.append(str(img_file))
+                for img_file in subdir_path.glob("*.jpeg"):
+                    image_paths.append(str(img_file))
+        
+        if not image_paths:
+            raise ValueError(f"No images found in {base_dir} subdirectories")
+        
+        # Limit the number of samples
+        if len(image_paths) > max_train_samples:
+            image_paths = random.sample(image_paths, max_train_samples)
+        
+        # Create a simple dataset with image paths
+        class LocalImageDataset:
+            def __init__(self, image_paths):
+                self.image_paths = image_paths
+            
+            def __len__(self):
+                return len(self.image_paths)
+            
+            def __getitem__(self, idx):
+                return {"image_path": self.image_paths[idx]}
+        
+        dataset = LocalImageDataset(image_paths)
+        dataloader = torch.utils.data.DataLoader(dataset, collate_fn=self.collate_fn, batch_size=1, pin_memory=True)
+        
+        calibration_data = self.prepare_calibration_data(dataloader, opt_init_steps)
+        return calibration_data
 
     def convert_sdpa_ov(self):
         vison_model = self.get_model()
@@ -601,10 +779,41 @@ class VisionModel():
         ov_model.reshape(shapes)
 
         ov.save_model(ov_model, Path(f"{self.ov_model_path}/vision.xml"))
+
+        if self.int8_quant:
+
+            calibration_data = self.prepare_dataset()
+            calibration_dataset = nncf.Dataset(calibration_data)
+            quantized_model = nncf.quantize(
+                model=ov_model,
+                calibration_dataset=calibration_dataset,
+                model_type=nncf.ModelType.TRANSFORMER,
+                subset_size=len(calibration_data),
+                # Smooth Quant algorithm reduces activation quantization error; optimal alpha value was obtained through grid search
+                advanced_parameters=nncf.AdvancedQuantizationParameters(smooth_quant_alpha=0.6)
+            )
+            # shapes = {}     
+            # for input_layer  in ov_model.inputs:
+            #     if input_layer.get_names().pop() == "pixel_values":
+            #         shapes[input_layer] = input_layer.partial_shape
+            #         shapes[input_layer][0] = 1
+            #         shapes[input_layer][1] = 4988
+            #         shapes[input_layer][2] = 3
+            #         shapes[input_layer][3] = 14
+            #         shapes[input_layer][4] = 14 
+            #     if input_layer.get_names().pop() == "image_grid_thw":
+            #         shapes[input_layer] = input_layer.partial_shape
+            #         shapes[input_layer][0] = 1
+            #         shapes[input_layer][1] = 3
+            #     if input_layer.get_names().pop() == "cu_seqlens":
+            #         shapes[input_layer] = input_layer.partial_shape
+            #         shapes[input_layer][0] = 2
+            # quantized_model.reshape(shapes)
+            ov.save_model(quantized_model, Path(f"{self.ov_model_path}/vision_int8.xml"))
         
 
 class PaddleOCR_VL_OV:
-    def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_int4_compress=False, vision_int8_quant=False):
+    def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_int4_compress=False, llm_int8_compress=False, vision_int8_quant=False):
 
         if model is None and pretrained_model_path:        
             self.model = AutoModelForCausalLM.from_pretrained(
@@ -620,18 +829,148 @@ class PaddleOCR_VL_OV:
             self.tokenizer = tokenizer
 
         self.int4_compress = llm_int4_compress
+        self.int8_compress = llm_int8_compress
         self.int8_quant = vision_int8_quant
-        self.vision_model = VisionModel(model=self.model, ov_model_path=ov_model_path, device=device, int8_quant=self.int8_quant)
+        self.vision_model = VisionModel(model=self.model, ov_model_path=ov_model_path, device=device, int8_quant=self.int8_quant, tokenizer=self.tokenizer)
         self.vision_mlp_model = VisionMlpModel(model=self.model, ov_model_path=ov_model_path, device=device)
 
         self.llm_embed_model = LlmEmbdModel(model=self.model, ov_model_path=ov_model_path, device=device)
-        self.llm_stateful_model = LlmStatefulModel(model=self.model, tokenizer= self.tokenizer, ov_model_path=ov_model_path, device=device, int4_compress=self.int4_compress)
+        self.llm_stateful_model = LlmStatefulModel(model=self.model, tokenizer= self.tokenizer, ov_model_path=ov_model_path, device=device, int4_compress=self.int4_compress, int8_compress=self.int8_compress)
 
     def export_vision_to_ov(self):
         self.vision_model.convert_sdpa_ov()
         self.vision_mlp_model.convert_sdpa_ov()
         self.llm_embed_model.convert_sdpa_ov()
         self.llm_stateful_model.convert_sdpa_ov()
+
+class PaddleOCRVLPreprocessor:
+    """
+    Preprocessor class for PaddleOCR-VL model.
+    Handles message preprocessing, image processing, and tokenization.
+    """
+    
+    def __init__(self, tokenizer):
+        """
+        Initialize the preprocessor.
+        
+        Args:
+            tokenizer: Tokenizer instance for text tokenization
+        """
+        self.tokenizer = tokenizer
+    
+    def preprocess(
+        self,
+        messages: List[dict],
+        chat_template: Optional[str] = None,
+        add_generation_prompt: bool = True,
+        image_processor_config: Optional[dict] = None,
+    ) -> dict:
+        """
+        Preprocess messages and images for the model.
+        
+        Args:
+            messages: List of conversation messages. Each message should have the format:
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": PIL.Image},
+                            {"type": "text", "text": "..."}
+                        ]
+                    }
+                ]
+            chat_template: Optional Jinja2 chat template string. If None, will use the default template.
+            add_generation_prompt: Whether to add generation prompt to the template.
+            image_processor_config: Optional dictionary with image processor configuration.
+                Default values:
+                {
+                    "resample": 3,
+                    "rescale_factor": 0.00392156862745098,
+                    "image_mean": [0.5, 0.5, 0.5],
+                    "image_std": [0.5, 0.5, 0.5],
+                    "min_pixels": 147384,
+                    "max_pixels": 2822400,
+                    "patch_size": 14,
+                    "temporal_patch_size": 1,
+                    "merge_size": 2
+                }
+        
+        Returns:
+            Dictionary containing:
+                - "text_inputs": Tokenized text inputs from tokenizer
+                - "images_info": Processed image information dictionary
+        """
+        # Use default chat template if not provided
+        if chat_template is None:
+            chat_template = '{%- if not add_generation_prompt is defined -%}\n    {%- set add_generation_prompt = true -%}\n{%- endif -%}\n{%- if not cls_token is defined -%}\n    {%- set cls_token = "<|begin_of_sentence|>" -%}\n{%- endif -%}\n{%- if not eos_token is defined -%}\n    {%- set eos_token = "</s>" -%}\n{%- endif -%}\n{%- if not image_token is defined -%}\n    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}\n{%- endif -%}\n{{- cls_token -}}\n{%- for message in messages -%}\n    {%- if message["role"] == "user" -%}\n        {{- "User: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "image" -%}\n                {{ image_token }}\n            {%- endif -%}\n        {%- endfor -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ "\\n" -}}\n    {%- elif message["role"] == "assistant" -%}\n        {{- "Assistant: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ eos_token -}}\n    {%- elif message["role"] == "system" -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] + "\\n" }}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{- "Assistant: " -}}\n{%- endif -%}\n'
+        
+        # Render Jinja template to get text with placeholders
+        text, generation_indices = render_jinja_template(
+            conversations=[messages],
+            chat_template=chat_template,
+            add_generation_prompt=add_generation_prompt,
+            return_tensors="pt",
+        )
+        
+        # Default image processor configuration
+        default_image_processor_config = {
+            "resample": 3,
+            "rescale_factor": 0.00392156862745098,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "min_pixels": 147384,
+            "max_pixels": 2822400,
+            "patch_size": 14,
+            "temporal_patch_size": 1,
+            "merge_size": 2
+        }
+        
+        # Merge user config with defaults
+        if image_processor_config:
+            default_image_processor_config.update(image_processor_config)
+        
+        # Create image processor
+        image_processor = PaddleOCRVLImageProcessor(**default_image_processor_config)
+        
+        # Extract images from messages
+        images = []
+        for message in messages:
+            if "content" in message:
+                for content in message["content"]:
+                    if content.get("type") == "image" and "image" in content:
+                        images.append(content["image"])
+        
+        # Process images
+        images_info = image_processor(images=images, return_tensors="pt")
+        
+        # Replace image placeholders in text
+        if not isinstance(text, list):
+            text = [text]
+        
+        index = 0
+        for i in range(len(text)):
+            while "<|IMAGE_PLACEHOLDER|>" in text[i]:
+                text[i] = text[i].replace(
+                    "<|IMAGE_PLACEHOLDER|>",
+                    "<|placeholder|>"
+                    * (
+                        images_info['image_grid_thw'][index].prod()
+                        // 2
+                        // 2
+                    ),
+                    1,
+                )
+                index += 1
+            text[i] = text[i].replace("<|placeholder|>", "<|IMAGE_PLACEHOLDER|>")
+        
+        # Tokenize text
+        text_inputs = self.tokenizer(text, return_tensors="pt")
+        
+        return {
+            "text_inputs": text_inputs,
+            "images_info": images_info,
+        }
+
 
 class OVPaddleOCRVLForCausalLM(GenerationMixin):
     _is_stateful = True  # 标记为 stateful 模型，用于 transformers 的生成方法
@@ -641,30 +980,36 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         core=None,
         ov_model_path=None,
         device='CPU',
-        llm_int4_compress=False, 
+        llm_int4_compress=False,
+        llm_int8_compress=False, 
         vision_int8_quant=False, 
         llm_int8_quant=False,
         llm_infer_list=[],
         vision_infer=[],
     ):
+        
         self.ov_model_path = ov_model_path
         self.core = core
         self.ov_device = device
         self.llm_int4_compress = llm_int4_compress
+        self.llm_int8_compress = llm_int8_compress
         self.vision_int8_quant = vision_int8_quant
         self.llm_int8_quant = llm_int8_quant
 
         ov_config = {
-            "DYNAMIC_QUANTIZATION_GROUP_SIZE": "128",  #32
+            "DYNAMIC_QUANTIZATION_GROUP_SIZE": "64",  #32
             "PERFORMANCE_HINT": "LATENCY",
             "NUM_STREAMS": "1",
             "CACHE_DIR": "",
         }
 
+        # 根据压缩选项加载相应的模型
         if llm_int4_compress:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful_int4.xml"))
+            self.llm_model = Path(f"{ov_model_path}/llm_stateful_int4.xml")
+        elif llm_int8_compress:
+            self.llm_model = Path(f"{ov_model_path}/llm_stateful_int8.xml")
         else:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful.xml"))
+            self.llm_model = Path(f"{ov_model_path}/llm_stateful.xml")
         if llm_int8_quant:
             self.llm_compiled_model = core.compile_model(self.llm_model, device, config = ov_config)
         else:
@@ -672,8 +1017,8 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             
         self.llm_request = self.llm_compiled_model.create_infer_request()
 
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_model.inputs)}
-        self.output_names = {idx: key for idx, key in enumerate(self.llm_model.outputs)}
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_compiled_model.inputs)}
+        self.output_names = {idx: key for idx, key in enumerate(self.llm_compiled_model.outputs)}
         self.key_value_input_names = [key for key in list(self.input_names) if key not in ["beam_idx", "inputs_embeds", "attention_mask", "position_ids"]]
         self.key_value_output_names = [key for key in list(self.output_names)[1:]]
         self.stateful = len(self.key_value_input_names) == 0
@@ -694,6 +1039,9 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         
         self.tokenizer = AutoTokenizer.from_pretrained(ov_model_path, trust_remote_code=True)
 
+        # Initialize preprocessor
+        self.preprocessor = PaddleOCRVLPreprocessor(tokenizer=self.tokenizer)
+
         self.vision_model_init()
 
         self.llm_infer_list = llm_infer_list
@@ -704,9 +1052,9 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
     def vision_model_init(self):
         if self.vision_int8_quant:
-            self.vision_encoder_model = self.core.read_model(Path(f"{self.ov_model_path}/vision_int8.xml"))
+            self.vision_encoder_model = Path(f"{self.ov_model_path}/vision_int8.xml")
         else:
-            self.vision_encoder_model = self.core.read_model(Path(f"{self.ov_model_path}/vision.xml"))
+            self.vision_encoder_model = Path(f"{self.ov_model_path}/vision.xml")
         # self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model, self.ov_device, config = {'INFERENCE_PRECISION_HINT': 'f32'})
         self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model, self.ov_device)
 
@@ -1106,119 +1454,6 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
             return position_ids, mrope_position_deltas
     
-    def preprocess(
-        self,
-        messages: List[dict],
-        chat_template: Optional[str] = None,
-        add_generation_prompt: bool = True,
-        image_processor_config: Optional[dict] = None,
-    ) -> dict:
-        """
-        Preprocess messages and images for the model.
-        
-        Args:
-            messages: List of conversation messages. Each message should have the format:
-                [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "image": PIL.Image},
-                            {"type": "text", "text": "..."}
-                        ]
-                    }
-                ]
-            chat_template: Optional Jinja2 chat template string. If None, will use the default template.
-            add_generation_prompt: Whether to add generation prompt to the template.
-            image_processor_config: Optional dictionary with image processor configuration.
-                Default values:
-                {
-                    "resample": 3,
-                    "rescale_factor": 0.00392156862745098,
-                    "image_mean": [0.5, 0.5, 0.5],
-                    "image_std": [0.5, 0.5, 0.5],
-                    "min_pixels": 147384,
-                    "max_pixels": 2822400,
-                    "patch_size": 14,
-                    "temporal_patch_size": 1,
-                    "merge_size": 2
-                }
-        
-        Returns:
-            Dictionary containing:
-                - "text_inputs": Tokenized text inputs from tokenizer
-                - "images_info": Processed image information dictionary
-        """
-        # Use default chat template if not provided
-        if chat_template is None:
-            chat_template = '{%- if not add_generation_prompt is defined -%}\n    {%- set add_generation_prompt = true -%}\n{%- endif -%}\n{%- if not cls_token is defined -%}\n    {%- set cls_token = "<|begin_of_sentence|>" -%}\n{%- endif -%}\n{%- if not eos_token is defined -%}\n    {%- set eos_token = "</s>" -%}\n{%- endif -%}\n{%- if not image_token is defined -%}\n    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}\n{%- endif -%}\n{{- cls_token -}}\n{%- for message in messages -%}\n    {%- if message["role"] == "user" -%}\n        {{- "User: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "image" -%}\n                {{ image_token }}\n            {%- endif -%}\n        {%- endfor -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ "\\n" -}}\n    {%- elif message["role"] == "assistant" -%}\n        {{- "Assistant: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ eos_token -}}\n    {%- elif message["role"] == "system" -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] + "\\n" }}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{- "Assistant: " -}}\n{%- endif -%}\n'
-        
-        # Render Jinja template to get text with placeholders
-        text, generation_indices = render_jinja_template(
-            conversations=[messages],
-            chat_template=chat_template,
-            add_generation_prompt=add_generation_prompt,
-            return_tensors="pt",
-        )
-        
-        # Default image processor configuration
-        default_image_processor_config = {
-            "resample": 3,
-            "rescale_factor": 0.00392156862745098,
-            "image_mean": [0.5, 0.5, 0.5],
-            "image_std": [0.5, 0.5, 0.5],
-            "min_pixels": 147384,
-            "max_pixels": 2822400,
-            "patch_size": 14,
-            "temporal_patch_size": 1,
-            "merge_size": 2
-        }
-        
-        # Merge user config with defaults
-        if image_processor_config:
-            default_image_processor_config.update(image_processor_config)
-        
-        # Create image processor
-        image_processor = PaddleOCRVLImageProcessor(**default_image_processor_config)
-        
-        # Extract images from messages
-        images = []
-        for message in messages:
-            if "content" in message:
-                for content in message["content"]:
-                    if content.get("type") == "image" and "image" in content:
-                        images.append(content["image"])
-        
-        # Process images
-        images_info = image_processor(images=images, return_tensors="pt")
-        
-        # Replace image placeholders in text
-        if not isinstance(text, list):
-            text = [text]
-        
-        index = 0
-        for i in range(len(text)):
-            while "<|IMAGE_PLACEHOLDER|>" in text[i]:
-                text[i] = text[i].replace(
-                    "<|IMAGE_PLACEHOLDER|>",
-                    "<|placeholder|>"
-                    * (
-                        images_info['image_grid_thw'][index].prod()
-                        // 2
-                        // 2
-                    ),
-                    1,
-                )
-                index += 1
-            text[i] = text[i].replace("<|placeholder|>", "<|IMAGE_PLACEHOLDER|>")
-        
-        # Tokenize text
-        text_inputs = self.tokenizer(text, return_tensors="pt")
-        
-        return {
-            "text_inputs": text_inputs,
-            "images_info": images_info,
-        }
-
     def chat(self, messages=None, chat_template=None, generation_config=None, image_processor_config=None, verbose=False):
         # Handle default generation_config
         if generation_config is None:
@@ -1230,7 +1465,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                 "do_sample": False,
             }
         
-        inputs_dict = self.preprocess(messages=messages, chat_template=chat_template, image_processor_config=image_processor_config)
+        inputs_dict = self.preprocessor.preprocess(messages=messages, chat_template=chat_template, image_processor_config=image_processor_config)
         input_ids = inputs_dict["text_inputs"]["input_ids"]
         attention_mask = inputs_dict["text_inputs"]["attention_mask"]
         pixel_values = inputs_dict["images_info"]["pixel_values"]
