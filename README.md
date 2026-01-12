@@ -1,5 +1,7 @@
 # PaddleOCR-VL OpenVINO Pipeline
 
+![PaddleOCR-VL Demo](./pp_ocr_vl_pipeline.gif)
+
 A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, supporting document layout detection and Vision Language Model (VLM) inference. Features automatic model downloading for out-of-the-box usage.
 
 ## 📋 Table of Contents
@@ -278,6 +280,24 @@ pipeline = PaddleOCRVL(
     layout_device="GPU",
 )
 ```
+
+### Gradio Server
+
+We provide an interactive Gradio web interface for easy document understanding. Launch the server with:
+
+```bash
+python gradio_server.py
+```
+
+The server will start at `http://localhost:7860` and automatically open in your browser.
+
+**Usage:**
+
+1. Go to the "Pipeline 配置" tab to initialize the pipeline
+2. Upload an image in the "文档识别" tab
+3. Configure parameters (layout detection threshold, max tokens, etc.)
+4. Click "开始识别" to process the image
+5. View results in multiple formats (Markdown, JSON, visualization)
 
 ## 📧 Contact
 
