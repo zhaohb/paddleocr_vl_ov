@@ -682,11 +682,11 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
         # 根据压缩选项加载相应的模型
         if llm_int4_compress:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful_int4.xml"))
+            self.llm_model = Path(f"{ov_model_path}/llm_stateful_int4.xml")
         elif llm_int8_compress:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful_int8.xml"))
+            self.llm_model = Path(f"{ov_model_path}/llm_stateful_int8.xml")
         else:
-            self.llm_model = core.read_model(Path(f"{ov_model_path}/llm_stateful.xml"))
+            self.llm_model = Path(f"{ov_model_path}/llm_stateful.xml")
         if llm_int8_quant:
             self.llm_compiled_model = core.compile_model(self.llm_model, device, config = ov_config)
         else:
@@ -694,8 +694,8 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             
         self.llm_request = self.llm_compiled_model.create_infer_request()
 
-        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_model.inputs)}
-        self.output_names = {idx: key for idx, key in enumerate(self.llm_model.outputs)}
+        self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_compiled_model.inputs)}
+        self.output_names = {idx: key for idx, key in enumerate(self.llm_compiled_model.outputs)}
         self.key_value_input_names = [key for key in list(self.input_names) if key not in ["beam_idx", "inputs_embeds", "attention_mask", "position_ids"]]
         self.key_value_output_names = [key for key in list(self.output_names)[1:]]
         self.stateful = len(self.key_value_input_names) == 0
@@ -726,9 +726,9 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
     def vision_model_init(self):
         if self.vision_int8_quant:
-            self.vision_encoder_model = self.core.read_model(Path(f"{self.ov_model_path}/vision_int8.xml"))
+            self.vision_encoder_model = Path(f"{self.ov_model_path}/vision_int8.xml")
         else:
-            self.vision_encoder_model = self.core.read_model(Path(f"{self.ov_model_path}/vision.xml"))
+            self.vision_encoder_model = Path(f"{self.ov_model_path}/vision.xml")
         # self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model, self.ov_device, config = {'INFERENCE_PRECISION_HINT': 'f32'})
         self.vision_encoder_compiled_model = self.core.compile_model(self.vision_encoder_model, self.ov_device)
 

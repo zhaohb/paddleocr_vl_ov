@@ -22,6 +22,17 @@ PROMPTS = {
 
 chat_template = '{%- if not add_generation_prompt is defined -%}\n    {%- set add_generation_prompt = true -%}\n{%- endif -%}\n{%- if not cls_token is defined -%}\n    {%- set cls_token = "<|begin_of_sentence|>" -%}\n{%- endif -%}\n{%- if not eos_token is defined -%}\n    {%- set eos_token = "</s>" -%}\n{%- endif -%}\n{%- if not image_token is defined -%}\n    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}\n{%- endif -%}\n{{- cls_token -}}\n{%- for message in messages -%}\n    {%- if message["role"] == "user" -%}\n        {{- "User: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "image" -%}\n                {{ image_token }}\n            {%- endif -%}\n        {%- endfor -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ "\\n" -}}\n    {%- elif message["role"] == "assistant" -%}\n        {{- "Assistant: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ eos_token -}}\n    {%- elif message["role"] == "system" -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] + "\\n" }}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{- "Assistant: " -}}\n{%- endif -%}\n'
 
+def memory_logging(py):
+    memory_info = py.memory_info()
+    rss_mb = memory_info.rss / (1024 ** 2)
+    vms_mb = memory_info.vms / (1024 ** 2)
+    return rss_mb, vms_mb
+
+import psutil
+import os
+
+pid = os.getpid()
+py = psutil.Process(pid)
 
 def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task, device=DEVICE, ov_device="GPU", run_torch=True):
     """主函数：执行Transformers和OpenVINO模型的OCR识别对比测试"""
@@ -80,6 +91,8 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
         print("="*60 + "\n")
 
     # ========== OpenVINO模型测试 ==========
+    init_rss , int_vms = memory_logging(py)
+
     print("\n" + "="*60)
     print("🔄 正在加载OpenVINO模型...")
     print("="*60)
@@ -110,6 +123,13 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
         "do_sample": False,
     }
     
+    print("====[OV] Warmup Run====")
+    response, history = paddleocr_vl_model.chat(
+        messages=messages,
+        generation_config=generation_config
+    )
+    print("====[OV] Warmup Complete====")
+
     # 统计 chat 方法的执行时间
     start_time = time.perf_counter()
     response, history = paddleocr_vl_model.chat(
@@ -117,6 +137,9 @@ def main(pretrained_model_path, ov_model_path, image_path=image_path, task=task,
         generation_config=generation_config
     )
     chat_time = time.perf_counter() - start_time
+
+    infer_rss, infer_vms = memory_logging(py)
+    print(f"[OV {ov_device}] {task} Pipeline, RSS: {infer_rss-init_rss:.2f} MB, VMS: {infer_vms-int_vms:.2f} MB")
 
     print("\n" + "="*60)
     print(f"📄 {ov_device} openVINO {task} 识别结果:")
