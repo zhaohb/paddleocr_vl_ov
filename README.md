@@ -41,6 +41,11 @@ A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, s
   - Independent device configuration for layout detection and VLM models
   - Support for mixed device deployment (e.g., NPU for layout detection, GPU for VLM)
 
+- ✅ **Model Quantization & Compression**
+  - Support for INT4/INT8 quantization compression
+  - Configurable quantization options for LLM and Vision models
+  - Balance between model size, inference speed, and accuracy
+
 ## 📁 Project Structure
 
 ```
@@ -100,6 +105,10 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,      # Automatically download VLM model
     vlm_device="GPU", 
     layout_device="GPU",
+    llm_int4_compress=False,  # LLM INT4 quantization compression
+    vision_int8_quant=True,   # Vision model INT8 quantization
+    llm_int8_compress=True,   # LLM INT8 quantization compression
+    llm_int8_quant=True,      # LLM INT8 quantization
 )
 
 # Predict
@@ -117,6 +126,20 @@ for res in output:
 
 ## 📖 Usage
 
+### Quantization & Compression Options
+
+The pipeline supports various quantization and compression options to optimize model size, memory usage, and inference speed:
+
+- **`llm_int4_compress`** (default: `False`): INT4 quantization compression for LLM model. Significantly reduces model size and memory usage, but may slightly affect accuracy.
+- **`vision_int8_quant`** (default: `True`): INT8 quantization for Vision model. Balances accuracy and performance.
+- **`llm_int8_compress`** (default: `True`): INT8 quantization compression for LLM model. Reduces model size while maintaining good accuracy.
+- **`llm_int8_quant`** (default: `True`): INT8 quantization for LLM model. Improves inference speed with minimal accuracy loss.
+
+**Recommendations:**
+- For **maximum accuracy**: Set all quantization options to `False`
+- For **balanced performance**: Use default settings (`vision_int8_quant=True`, `llm_int8_compress=True`, `llm_int8_quant=True`, `llm_int4_compress=False`)
+- For **maximum compression**: Use settings(`llm_int4_compress=True` `llm_int8_quant=True`, `llm_int4_compress=False` `llm_int8_compress=False`) (smallest model size, but may affect accuracy)
+
 ### Method 1: Fully Automatic Download (Recommended)
 
 When model paths are set to `None`, models will be automatically downloaded from ModelScope:
@@ -129,6 +152,10 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,     # Automatic download
     vlm_device="GPU", 
     layout_device="GPU",
+    llm_int4_compress=False,  # LLM INT4 quantization compression
+    vision_int8_quant=True,   # Vision model INT8 quantization
+    llm_int8_compress=True,   # LLM INT8 quantization compression
+    llm_int8_quant=True,      # LLM INT8 quantization
 )
 ```
 
@@ -142,6 +169,10 @@ pipeline = PaddleOCRVL(
     vlm_model_path="C:/path/to/existing/vlm_model",
     vlm_device="GPU", 
     layout_device="NPU",
+    llm_int4_compress=False,
+    vision_int8_quant=True,
+    llm_int8_compress=True,
+    llm_int8_quant=True,
 )
 ```
 
@@ -156,6 +187,10 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,     # Automatically download VLM model
     vlm_device="GPU",        # Use GPU for VLM model
     layout_device="GPU",     # Use GPU for layout detection model
+    llm_int4_compress=False,  # LLM INT4 quantization compression (default: False)
+    vision_int8_quant=True,   # Vision model INT8 quantization (default: True)
+    llm_int8_compress=True,   # LLM INT8 quantization compression (default: True)
+    llm_int8_quant=True,      # LLM INT8 quantization (default: True)
 )
 
 # Execute prediction
@@ -191,6 +226,10 @@ for res in output:
 | `merge_layout_blocks` | `bool` | `True` | Whether to merge layout blocks |
 | `markdown_ignore_labels` | `List[str]` | `None` | List of labels to ignore in Markdown output |
 | `cache_dir` | `Optional[str]` | `None` | ModelScope model cache directory, uses default cache directory if `None` |
+| `llm_int4_compress` | `bool` | `False` | Enable LLM INT4 quantization compression (significantly reduces model size and memory usage, may slightly affect accuracy) |
+| `vision_int8_quant` | `bool` | `True` | Enable Vision model INT8 quantization (balances accuracy and performance) |
+| `llm_int8_compress` | `bool` | `True` | Enable LLM INT8 quantization compression (reduces model size, may slightly affect accuracy) |
+| `llm_int8_quant` | `bool` | `True` | Enable LLM INT8 quantization (improves inference speed, may slightly affect accuracy) |
 
 #### `predict` Method
 
@@ -277,6 +316,10 @@ pipeline = PaddleOCRVL(
     cache_dir="./models_cache",  # Custom cache directory
     vlm_device="GPU",
     layout_device="GPU",
+    llm_int4_compress=False,
+    vision_int8_quant=True,
+    llm_int8_compress=True,
+    llm_int8_quant=True,
 )
 ```
 
