@@ -6,7 +6,7 @@ Gradio Server for PaddleOCR-VL OpenVINO Pipeline
 import gradio as gr
 import os
 from pathlib import Path
-from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 import tempfile
 import json
 

@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paddleocr-vl-openvino"
+version = "0.1.0"
+description = "Using OpenVINO to speed up inference of PaddleOCR_VL model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+keywords = ["paddleocr", "openvino", "vlm", "document-understanding", "ocr"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "openvino>=2025.4.1",
+    "numpy>=1.21.6",
+    "pillow>=11.0.0",
+    "opencv-python>=4.11.0.86",
+    "modelscope>=1.26.0",
+    "huggingface-hub>=0.32.4",
+    "tqdm>=4.67.1",
+    "requests",
+    "torch>=2.8.0",
+    "torchvision>=0.23.0",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "gradio>=5.29.0",
+    "transformers>=4.54.0",
+    "nncf>=2.18.0",
+    "datasets>=3.6.0",
+    "protobuf>=6.32.0",
+    "sentencepiece>=0.2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-cov",
+    "black",
+    "ruff",
+]
+
+[project.urls]
+homepage = "https://github.com/opendatalab/PaddleOCR-VL"
+documentation = "https://github.com/opendatalab/PaddleOCR-VL"
+repository = "https://github.com/opendatalab/PaddleOCR-VL"
+issues = "https://github.com/opendatalab/PaddleOCR-VL/issues"
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["paddleocr_vl_openvino*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"*" = ["*.md", "*.txt", "*.gif", "*.jpg", "*.png"]
+

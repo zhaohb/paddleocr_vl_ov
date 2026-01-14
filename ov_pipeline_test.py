@@ -1,4 +1,4 @@
-from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
 # 初始化（支持自动下载模型）
 # 方式1: 自动下载（如果模型路径为 None）

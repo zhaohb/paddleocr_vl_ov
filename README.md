@@ -50,18 +50,20 @@ A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, s
 
 ```
 paddleocr_vl_ov/
-├── paddleocr_vl/              # VLM model related code
-│   ├── ov_paddleocr_vl.py     # OpenVINO VLM model implementation
-│   ├── image_processing_paddleocr_vl.py  # Image preprocessing
-│   ├── modeling_paddleocr_vl.py          # Model definition
-│   └── README.md              # VLM model documentation
-├── paddleocr_vl_pipeline/     # Pipeline implementation
-│   └── ov_paddleocr_vl_pipeline.py  # Main Pipeline class
-├── pp_doclayoutv2/           # Layout detection related code
-│   └── ov_pp_layoutv2_infer.py  # Layout detection inference
-├── ov_pipeline_test.py      # Test script
-├── requirements.txt         # Dependencies list
-└── README.md               # This file
+├── paddleocr_vl_openvino/          # Main package
+│   ├── paddleocr_vl/               # VLM model related code
+│   │   ├── ov_paddleocr_vl.py     # OpenVINO VLM model implementation
+│   │   └── image_processing_paddleocr_vl.py  # Image preprocessing
+│   ├── paddleocr_vl_pipeline/      # Pipeline implementation
+│   │   └── ov_paddleocr_vl_pipeline.py  # Main Pipeline class
+│   └── pp_doclayoutv2/            # Layout detection related code
+│       └── ov_pp_layoutv2_infer.py  # Layout detection inference
+├── ov_pipeline_test.py             # Test script
+├── gradio_server.py                # Gradio web interface
+├── requirements.txt                # Dependencies list
+├── pyproject.toml                  # Package configuration
+├── build_wheel.py                  # Build script for whl package
+└── README.md                       # This file
 ```
 
 ## 🔧 Installation
@@ -71,33 +73,71 @@ paddleocr_vl_ov/
 - Python 3.10+
 - OpenVINO 2025.4+
 
-### Installation Steps
+### Installation Methods
 
-1. **Clone the repository** (if applicable)
+#### Method 1: Install from Wheel Package (Recommended)
+
+The easiest way to install is using the pre-built wheel package:
+
+```bash
+# Download or build the wheel package
+# If you have the .whl file:
+pip install paddleocr_vl_openvino-0.1.0-py3-none-any.whl
+
+# Or install from the built package in dist/ directory:
+cd paddleocr_vl_ov
+pip install dist/paddleocr_vl_openvino-*.whl
+```
+
+This will automatically install all required dependencies.
+
+#### Method 2: Build and Install from Source
+
+1. **Clone the repository**
 
 ```bash
 git clone <repository_url>
 cd paddleocr_vl_ov
 ```
 
-2. **Install dependencies**
+2. **Build the wheel package**
 
 ```bash
-pip install -r requirements.txt
+# Install build tools
+pip install --upgrade setuptools wheel build
+
+# Build the package
+python -m build --wheel
+
+# Or use the provided build script
+python build_wheel.py
 ```
 
-3. **Install OpenVINO**
+3. **Install the built package**
 
 ```bash
-pip install openvino==2025.4.1
+pip install dist/paddleocr_vl_openvino-*.whl
 ```
+
+#### Method 3: Install in Development Mode
+
+For development, you can install the package in editable mode:
+
+```bash
+# Install in development mode
+pip install -e .
+
+# This allows you to modify the code without reinstalling
+```
+
+**Note:** When installing from wheel package, all dependencies including OpenVINO will be automatically installed.
 
 ## 🚀 Quick Start
 
 ### Simplest Usage (Automatic Model Download)
 
 ```python
-from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
 # Initialize (automatic model download)
 pipeline = PaddleOCRVL(
@@ -145,7 +185,7 @@ The pipeline supports various quantization and compression options to optimize m
 When model paths are set to `None`, models will be automatically downloaded from ModelScope:
 
 ```python
-from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
 pipeline = PaddleOCRVL(
     layout_model_path=None,  # Automatic download
@@ -179,7 +219,7 @@ pipeline = PaddleOCRVL(
 ### Complete Example
 
 ```python
-from paddleocr_vl_pipeline.ov_paddleocr_vl_pipeline import PaddleOCRVL
+from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
 # Initialize Pipeline
 pipeline = PaddleOCRVL(
@@ -340,6 +380,7 @@ The server will start at `http://localhost:7860` and automatically open in your 
 3. Configure parameters (layout detection threshold, max tokens, etc.)
 4. Click "开始识别" to process the image
 5. View results in multiple formats (Markdown, JSON, visualization)
+
 
 ## 📧 Contact
 

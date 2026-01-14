@@ -28,17 +28,17 @@ except ImportError:
     logging.warning("modelscope not installed. Auto-download feature will be disabled. Install with: pip install modelscope")
 
 # 导入布局检测相关函数
-from pp_doclayoutv2.ov_pp_layoutv2_infer import (
+from ..pp_doclayoutv2.ov_pp_layoutv2_infer import (
     preprocess_image_doclayout,
     postprocess_detections_detr,
     LayoutDetectionResult,
 )
 
 # 导入 VLM 模型
-from paddleocr_vl.ov_paddleocr_vl import OVPaddleOCRVLForCausalLM
+from ..paddleocr_vl.ov_paddleocr_vl import OVPaddleOCRVLForCausalLM
 
 # 导入图像处理
-from paddleocr_vl.image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
+from ..paddleocr_vl.image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 
 # 图像标签定义（参考 PaddleX）
 BLOCK_LABEL_MAP = {
