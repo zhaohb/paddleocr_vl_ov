@@ -31,6 +31,7 @@ except ImportError:
 from ..pp_doclayoutv2.ov_pp_layoutv2_infer import (
     preprocess_image_doclayout,
     postprocess_detections_detr,
+    postprocess_detections_paddle_nms,
     LayoutDetectionResult,
 )
 
@@ -844,10 +845,11 @@ class PaddleOCRVL:
         vlm_device: str = "CPU",
         layout_device: str = "NPU",
         use_layout_detection: bool = True,
-        use_chart_recognition: bool = False,
+        use_chart_recognition: bool = True,
         merge_layout_blocks: bool = True,
         markdown_ignore_labels: Optional[List[str]] = None,
         cache_dir: Optional[str] = None,
+        layout_precision: str = "fp16",
         llm_int4_compress: bool = False,
         vision_int8_quant: bool = True,
         llm_int8_compress: bool = True,
@@ -866,6 +868,12 @@ class PaddleOCRVL:
             merge_layout_blocks: 是否合并布局块
             markdown_ignore_labels: Markdown 输出中忽略的标签列表
             cache_dir: ModelScope 模型缓存目录，如果为 None 则使用默认缓存目录
+            layout_precision: 布局检测模型精度选择，选项: "fp16", "fp32", "combined_fp16", "combined_fp32"
+                - "fp16": FP16 精度模型（更快，内存占用更低）
+                - "fp32": FP32 精度模型（更准确，默认）
+                - "combined_fp16": FP16 合并模型（合并了 batch size 和 boxes 节点）
+                - "combined_fp32": FP32 合并模型（合并了 batch size 和 boxes 节点）
+                注意：如果指定了 layout_model_path 为具体的 .xml 文件路径，此参数将被忽略
         """
         self.vlm_device = vlm_device
         self.layout_device = layout_device
@@ -877,12 +885,21 @@ class PaddleOCRVL:
             "footer", "footer_image", "aside_text"
         ]
         self.cache_dir = cache_dir
+        self.layout_precision = layout_precision
+        
+        # 验证 precision 参数
+        valid_precisions = ["fp16", "fp32", "combined_fp16", "combined_fp32"]
+        if layout_precision not in valid_precisions:
+            raise ValueError(
+                f"Unsupported layout_precision: {layout_precision}. "
+                f"Supported options: {valid_precisions}"
+            )
         
         # 自动下载或验证模型路径
         if layout_model_path is None:
             if not MODELSCOPE_AVAILABLE:
                 raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
-            print(f"📥 自动下载布局检测模型: {self.LAYOUT_MODEL_ID}")
+            print(f"📥 自动下载布局检测模型: {self.LAYOUT_MODEL_ID} (precision: {layout_precision})")
             layout_model_path = self._download_layout_model()
         else:
             layout_model_path = self._ensure_layout_model(layout_model_path)
@@ -917,24 +934,46 @@ class PaddleOCRVL:
         
         print(f"正在从 ModelScope 下载布局检测模型: {self.LAYOUT_MODEL_ID}")
         model_dir = snapshot_download(self.LAYOUT_MODEL_ID, cache_dir=self.cache_dir)
+        model_dir = Path(model_dir)
         
-        # 查找 .xml 文件
-        xml_files = list(Path(model_dir).glob("*.xml"))
-        if not xml_files:
-            raise FileNotFoundError(f"在下载的模型目录中未找到 .xml 文件: {model_dir}")
+        # 根据 precision 选择对应的模型文件
+        precision_map = {
+            "fp16": "pp_doclayoutv2_f16.xml",
+            "fp32": "pp_doclayoutv2_f32.xml",
+            "combined_fp16": "pp_doclayoutv2_f16_combined.xml",
+            "combined_fp32": "pp_doclayoutv2_f32_combined.xml",
+        }
         
-        # 如果有多个 .xml 文件，优先选择包含 "f16" 或 "fp16" 的，否则选择第一个
-        layout_xml = None
-        for xml_file in xml_files:
-            if "f16" in xml_file.name.lower() or "fp16" in xml_file.name.lower():
-                layout_xml = str(xml_file)
-                break
+        model_filename = precision_map.get(self.layout_precision)
+        model_path = model_dir / model_filename if model_filename else None
         
-        if layout_xml is None:
-            layout_xml = str(xml_files[0])
+        # 如果指定的精度文件不存在，尝试查找其他可用的模型文件
+        if model_path is None or not model_path.exists():
+            print(f"⚠️  指定的精度模型文件不存在: {model_filename if model_filename else 'N/A'}")
+            # 查找所有 .xml 文件
+            xml_files = list(model_dir.glob("*.xml"))
+            if not xml_files:
+                raise FileNotFoundError(f"在下载的模型目录中未找到 .xml 文件: {model_dir}")
+            
+            # 优先选择合并版本
+            combined_files = [f for f in xml_files if "combined" in f.name]
+            if combined_files:
+                model_path = combined_files[0]
+                print(f"⚠️  使用找到的合并模型: {model_path.name}")
+            else:
+                # 否则使用第一个找到的文件
+                model_path = xml_files[0]
+                print(f"⚠️  使用找到的模型: {model_path.name}")
+        else:
+            print(f"✅ 使用指定的精度模型: {model_filename}")
         
-        print(f"✅ 布局检测模型已下载到: {layout_xml}")
-        return layout_xml
+        # 检查对应的 .bin 文件是否存在
+        bin_path = model_path.with_suffix(".bin")
+        if not bin_path.exists():
+            raise FileNotFoundError(f"对应的 .bin 文件不存在: {bin_path}")
+        
+        print(f"✅ 布局检测模型已下载到: {model_path}")
+        return str(model_path)
     
     def _download_vlm_model(self) -> str:
         """下载 VLM 模型"""
@@ -965,26 +1004,55 @@ class PaddleOCRVL:
         """确保布局检测模型存在，如果不存在则下载"""
         model_path_obj = Path(model_path)
         
-        # 如果是目录，查找其中的 .xml 文件
+        # 如果是目录，根据 precision 查找对应的 .xml 文件
         if model_path_obj.is_dir():
-            xml_files = list(model_path_obj.glob("*.xml"))
-            if not xml_files:
-                print(f"⚠️  在指定目录中未找到 .xml 文件，尝试自动下载: {model_path}")
+            # 根据 precision 优先级搜索
+            precision_map = {
+                "fp16": ["pp_doclayoutv2_f16.xml", "*.xml"],
+                "fp32": ["pp_doclayoutv2_f32.xml", "*.xml"],
+                "combined_fp16": ["pp_doclayoutv2_f16_combined.xml", "pp_doclayoutv2_f16.xml", "*.xml"],
+                "combined_fp32": ["pp_doclayoutv2_f32_combined.xml", "pp_doclayoutv2_f32.xml", "*.xml"],
+            }
+            
+            search_patterns = precision_map.get(self.layout_precision, ["*.xml"])
+            xml_file = None
+            
+            for pattern in search_patterns:
+                if pattern == "*.xml":
+                    xml_files = list(model_path_obj.glob(pattern))
+                    if xml_files:
+                        xml_file = xml_files[0]
+                        break
+                else:
+                    candidate = model_path_obj / pattern
+                    if candidate.exists():
+                        xml_file = candidate
+                        break
+            
+            if xml_file is None:
+                print(f"⚠️  在指定目录中未找到匹配的 .xml 文件，尝试自动下载: {model_path}")
                 return self._download_layout_model()
-            # 优先选择包含 "f16" 或 "fp16" 的
-            layout_xml = None
-            for xml_file in xml_files:
-                if "f16" in xml_file.name.lower() or "fp16" in xml_file.name.lower():
-                    layout_xml = str(xml_file)
-                    break
-            if layout_xml is None:
-                layout_xml = str(xml_files[0])
-            return layout_xml
+            
+            # 检查对应的 .bin 文件是否存在
+            bin_path = xml_file.with_suffix(".bin")
+            if not bin_path.exists():
+                print(f"⚠️  对应的 .bin 文件不存在: {bin_path}，尝试自动下载")
+                return self._download_layout_model()
+            
+            return str(xml_file)
         
         # 如果是文件路径，检查文件是否存在
         if not model_path_obj.exists():
             print(f"⚠️  模型文件不存在，尝试自动下载: {model_path}")
             return self._download_layout_model()
+        
+        # 如果指定了具体的 .xml 文件路径，直接使用（忽略 precision 参数）
+        if model_path_obj.suffix.lower() == ".xml":
+            bin_path = model_path_obj.with_suffix(".bin")
+            if not bin_path.exists():
+                print(f"⚠️  对应的 .bin 文件不存在: {bin_path}，尝试自动下载")
+                return self._download_layout_model()
+            return model_path
         
         return model_path
     
@@ -1267,18 +1335,39 @@ class PaddleOCRVL:
             output_tensor = result[out]
             output.append(output_tensor.data)
         
-        # 后处理
-        boxes = postprocess_detections_detr(
-            output,
-            scale_h,
-            scale_w,
-            orig_h,
-            orig_w,
-            threshold=threshold,
-            layout_nms=layout_nms,
-            layout_unclip_ratio=layout_unclip_ratio,
-            layout_merge_bboxes_mode=layout_merge_bboxes_mode,
-        )
+        # 后处理：根据输出形状选择后处理函数
+        out0 = np.array(output[0]) if len(output) > 0 else None
+        out1 = np.array(output[1]) if len(output) > 1 else None
+        if out0 is not None and out0.ndim == 2 and out0.shape[0] == 300 and out0.shape[1] in (6, 7) and out1 is not None and out1.size >= 1:
+            # PaddleDetection exported (already NMS-ed) outputs
+            boxes = postprocess_detections_paddle_nms(
+                output,
+                orig_h=orig_h,
+                orig_w=orig_w,
+                threshold=threshold,
+                layout_nms=layout_nms,
+                layout_unclip_ratio=layout_unclip_ratio,
+                layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+            )
+        else:
+            # Fallback to DETR-style postprocess (older models)
+            # Handle 3D arrays with batch dimension of 1: squeeze the first dimension
+            if output[0].ndim == 3:
+                output[0] = np.squeeze(output[0], axis=0)
+            if len(output) > 1 and output[1].ndim == 3:
+                output[1] = np.squeeze(output[1], axis=0)
+            
+            boxes = postprocess_detections_detr(
+                output,
+                scale_h,
+                scale_w,
+                orig_h,
+                orig_w,
+                threshold=threshold,
+                layout_nms=layout_nms,
+                layout_unclip_ratio=layout_unclip_ratio,
+                layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+            )
         
         # 转换为结果格式
         # postprocess_detections_detr 可能返回字典列表（restructured_boxes）或空列表

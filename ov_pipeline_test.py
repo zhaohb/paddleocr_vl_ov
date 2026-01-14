@@ -7,6 +7,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,      # 自动下载
     vlm_device="GPU", 
     layout_device="GPU",
+    layout_precision="fp16",
     llm_int4_compress=False,
     vision_int8_quant=True,
     llm_int8_compress=True,

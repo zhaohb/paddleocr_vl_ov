@@ -153,6 +153,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,      # Automatically download VLM model
     vlm_device="GPU", 
     layout_device="GPU",
+    layout_precision="fp16",  # Layout model precision: fp16 (faster), fp32 (more accurate), combined_fp16, combined_fp32
     llm_int4_compress=False,  # LLM INT4 quantization compression
     vision_int8_quant=True,   # Vision model INT8 quantization
     llm_int8_compress=True,   # LLM INT8 quantization compression
@@ -200,6 +201,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,     # Automatic download
     vlm_device="GPU", 
     layout_device="GPU",
+    layout_precision="fp16",  # Layout model precision: fp16 (faster), fp32 (more accurate)
     llm_int4_compress=False,  # LLM INT4 quantization compression
     vision_int8_quant=True,   # Vision model INT8 quantization
     llm_int8_compress=True,   # LLM INT8 quantization compression
@@ -235,6 +237,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,     # Automatically download VLM model
     vlm_device="GPU",        # Use GPU for VLM model
     layout_device="GPU",     # Use GPU for layout detection model
+    layout_precision="fp16",  # Layout model precision: fp16 (faster), fp32 (more accurate), combined_fp16, combined_fp32
     llm_int4_compress=False,  # LLM INT4 quantization compression (default: False)
     vision_int8_quant=True,   # Vision model INT8 quantization (default: True)
     llm_int8_compress=True,   # LLM INT8 quantization compression (default: True)
@@ -265,7 +268,7 @@ for res in output:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `layout_model_path` | `Optional[str]` | `None` | Layout detection model path (.xml file), automatically downloads if `None` |
+| `layout_model_path` | `Optional[str]` | `None` | Layout detection model path (.xml file), automatically downloads if `None`. **Note:** If a specific `.xml` file path is provided, the `layout_precision` parameter will be ignored |
 | `vlm_model_path` | `Optional[str]` | `None` | VLM model path (directory containing vision.xml, llm_stateful.xml, etc.), automatically downloads if `None` |
 | `vlm_device` | `str` | `"CPU"` | VLM model inference device: `"CPU"`, `"GPU"`, `"AUTO"` |
 | `layout_device` | `str` | `"NPU"` | Layout detection model inference device: `"CPU"`, `"GPU"`, `"NPU"`, `"AUTO"` |
@@ -274,6 +277,7 @@ for res in output:
 | `merge_layout_blocks` | `bool` | `True` | Whether to merge layout blocks |
 | `markdown_ignore_labels` | `List[str]` | `None` | List of labels to ignore in Markdown output |
 | `cache_dir` | `Optional[str]` | `None` | ModelScope model cache directory, uses default cache directory if `None` |
+| `layout_precision` | `str` | `"fp16"` | Layout detection model precision selection: `"fp16"`, `"fp32"`, `"combined_fp16"`, `"combined_fp32"`<br>- `"fp16"`: FP16 precision model (faster, lower memory usage, default)<br>- `"fp32"`: FP32 precision model (more accurate)<br>- `"combined_fp16"`: FP16 combined model (merged batch size and boxes nodes)<br>- `"combined_fp32"`: FP32 combined model (merged batch size and boxes nodes)<br>**Note:** Only effective when `layout_model_path` is `None` (auto-download) or points to a directory. If `layout_model_path` points to a specific `.xml` file, this parameter will be ignored |
 | `llm_int4_compress` | `bool` | `False` | Enable LLM INT4 quantization compression (significantly reduces model size and memory usage, may slightly affect accuracy) |
 | `vision_int8_quant` | `bool` | `True` | Enable Vision model INT8 quantization (balances accuracy and performance) |
 | `llm_int8_compress` | `bool` | `True` | Enable LLM INT8 quantization compression (reduces model size, may slightly affect accuracy) |
@@ -340,6 +344,30 @@ If you need to manually download models, you can use the following methods:
 pip install modelscope
 python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PP-DocLayoutV2-ov')"
 ```
+
+**Layout Detection Model Precision Selection:**
+
+The layout detection model (PP-DocLayoutV2-ov) provides multiple precision variants. You can select the desired precision using the `layout_precision` parameter:
+
+- **`fp16`** (default): FP16 precision model
+  - Faster inference speed
+  - Lower memory usage
+  - Suitable for most use cases
+  
+- **`fp32`**: FP32 precision model
+  - Higher accuracy
+  - More memory usage
+  - Suitable for accuracy-critical applications
+  
+- **`combined_fp16`**: FP16 combined model
+  - Merged batch size and boxes nodes
+  - Faster inference with simplified output format
+  
+- **`combined_fp32`**: FP32 combined model
+  - Merged batch size and boxes nodes
+  - Higher accuracy with simplified output format
+
+**Note:** The `layout_precision` parameter only takes effect when `layout_model_path` is `None` (auto-download) or points to a directory. If `layout_model_path` points to a specific `.xml` file, the precision parameter will be ignored and the specified model file will be used directly.
 
 #### PaddleOCR-VL VLM Model
 
