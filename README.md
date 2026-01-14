@@ -80,12 +80,20 @@ paddleocr_vl_ov/
 The easiest way to install is using the pre-built wheel package:
 
 ```bash
-# Download or build the wheel package
-# If you have the .whl file:
+# Method 1: Install from GitHub Release (Recommended)
+# Direct install from GitHub Release (replace v0.1.0 with the actual release version)
+pip install https://github.com/opendatalab/PaddleOCR-VL/releases/download/v0.1.0/paddleocr_vl_openvino-0.1.0-py3-none-any.whl
+
+# Or download manually from GitHub Releases:
+# 1. Visit: https://github.com/opendatalab/PaddleOCR-VL/releases
+# 2. Download the .whl file from the latest release
+# 3. Install locally:
 pip install paddleocr_vl_openvino-0.1.0-py3-none-any.whl
 
-# Or install from the built package in dist/ directory:
+# Method 2: Install from local build
+# Build and install from source code:
 cd paddleocr_vl_ov
+python -m build --wheel
 pip install dist/paddleocr_vl_openvino-*.whl
 ```
 
