@@ -1,6 +1,6 @@
-# PaddleOCR-VL OpenVINO Pipeline
+# PaddleOCR-VL OpenVINO
 
-![PaddleOCR-VL Demo](./pp_ocr_vl_pipeline.gif)
+![PaddleOCR-VL APP](./client_app/images/gui.png)
 
 A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, supporting document layout detection and Vision Language Model (VLM) inference. Features automatic model downloading for out-of-the-box usage.
 

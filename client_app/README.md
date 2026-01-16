@@ -2,6 +2,8 @@
 
 This directory contains a **PySide6** desktop GUI for running `paddleocr_vl_openvino` inference in batch, and for managing outputs and successful task history.
 
+![PaddleOCR-VL APP](./images/gui.png)
+
 ## Quick Start
 
 ### 1) Prepare the environment
