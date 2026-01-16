@@ -1,0 +1,8 @@
+PySide6>=6.7.0
+PyInstaller>=6.5.0
+PyMuPDF>=1.24.0
+
+# The core project dependencies are expected to be installed in the same env.
+# If you don't have them yet, install the wheel or install from pyproject/requirements.
+
+

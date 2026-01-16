@@ -935,6 +935,7 @@ class PaddleOCRVL:
         print(f"正在从 ModelScope 下载布局检测模型: {self.LAYOUT_MODEL_ID}")
         model_dir = snapshot_download(self.LAYOUT_MODEL_ID, cache_dir=self.cache_dir)
         model_dir = Path(model_dir)
+        xml_files: List[Path] = []
         
         # 根据 precision 选择对应的模型文件
         precision_map = {
@@ -953,9 +954,12 @@ class PaddleOCRVL:
             # 查找所有 .xml 文件
             xml_files = list(model_dir.glob("*.xml"))
             if not xml_files:
-                raise FileNotFoundError(f"在下载的模型目录中未找到 .xml 文件: {model_dir}")
-            
-            # 优先选择合并版本
+                raise FileNotFoundError(
+                    f"在下载的模型目录中未找到 .xml 文件: {model_dir}\n"
+                    f"layout_precision={self.layout_precision}"
+                )
+
+            # 优先选择合并版本（combined_*）
             combined_files = [f for f in xml_files if "combined" in f.name]
             if combined_files:
                 model_path = combined_files[0]
@@ -1022,7 +1026,7 @@ class PaddleOCRVL:
                     xml_files = list(model_path_obj.glob(pattern))
                     if xml_files:
                         xml_file = xml_files[0]
-                        break
+                    break
                 else:
                     candidate = model_path_obj / pattern
                     if candidate.exists():
@@ -1112,6 +1116,7 @@ class PaddleOCRVL:
         layout_unclip_ratio: Optional[Union[float, tuple]] = None,
         layout_merge_bboxes_mode: Optional[str] = None,
         max_new_tokens: Optional[int] = None,
+        prompt_label: str = "ocr",
         **kwargs,
     ):
         """
@@ -1168,6 +1173,7 @@ class PaddleOCRVL:
                 layout_nms=layout_nms,
                 layout_unclip_ratio=layout_unclip_ratio,
                 layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+                prompt_label=prompt_label,
             )
             
             # 执行 VLM 处理（布局解析）
@@ -1260,7 +1266,15 @@ class PaddleOCRVL:
             input_img=doc_preprocessor_image
         )
         
-        layout_det_result_obj.save_to_img(save_path="output")
+        # NOTE: PaddleX 不会在这里强制落盘保存可视化图片。
+        # 之前硬编码保存到 "output" 会导致多 PDF/多页结果互相覆盖（例如 page_0001_res.png 重复）。
+        # 仅在显式设置环境变量时保存，便于调试。
+        debug_save_dir = os.environ.get("PADDLEOCR_VL_DEBUG_SAVE_DIR", "").strip()
+        if debug_save_dir:
+            try:
+                layout_det_result_obj.save_to_img(save_path=debug_save_dir)
+            except Exception:
+                pass
         
         return {
             "input_path": input_path,
@@ -1357,17 +1371,17 @@ class PaddleOCRVL:
             if len(output) > 1 and output[1].ndim == 3:
                 output[1] = np.squeeze(output[1], axis=0)
             
-            boxes = postprocess_detections_detr(
-                output,
-                scale_h,
-                scale_w,
-                orig_h,
-                orig_w,
-                threshold=threshold,
-                layout_nms=layout_nms,
-                layout_unclip_ratio=layout_unclip_ratio,
-                layout_merge_bboxes_mode=layout_merge_bboxes_mode,
-            )
+        boxes = postprocess_detections_detr(
+            output,
+            scale_h,
+            scale_w,
+            orig_h,
+            orig_w,
+            threshold=threshold,
+            layout_nms=layout_nms,
+            layout_unclip_ratio=layout_unclip_ratio,
+            layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+        )
         
         # 转换为结果格式
         # postprocess_detections_detr 可能返回字典列表（restructured_boxes）或空列表
@@ -1542,7 +1556,7 @@ class PaddleOCRVL:
                         text_prompt = "Table Recognition:"
                         # 对于 table，需要处理表格中的图片（参考 PaddleX 第 261-267 行）
                         try:
-                            from paddlex.inference.pipelines.paddleocr_vl.uilts import (
+                            from ..paddleocr_vl.uilts import (
                                 tokenize_figure_of_table,
                             )
                             block_img, figure_token_map, drop_figures = (
@@ -1559,7 +1573,7 @@ class PaddleOCRVL:
                         text_prompt = "Formula Recognition:"
                         # 对于 formula，裁剪边距（参考 PaddleX 第 272 行）
                         try:
-                            from paddlex.inference.pipelines.paddleocr_vl.uilts import (
+                            from ..paddleocr_vl.uilts import (
                                 crop_margin,
                             )
                             block_img = crop_margin(block_img)
@@ -1621,7 +1635,7 @@ class PaddleOCRVL:
                     
                     # 处理重复内容（参考 PaddleX 第 337 行）
                     try:
-                        from paddlex.inference.pipelines.paddleocr_vl.uilts import (
+                        from ..paddleocr_vl.uilts import (
                             truncate_repetitive_content,
                         )
                         result_str = truncate_repetitive_content(result_str)
@@ -1648,7 +1662,7 @@ class PaddleOCRVL:
                     # 处理表格（参考 PaddleX 第 351-357 行）
                     if block_label == "table":
                         try:
-                            from paddlex.inference.pipelines.paddleocr_vl.uilts import (
+                            from ..paddleocr_vl.uilts import (
                                 convert_otsl_to_html,
                                 untokenize_figure_of_table,
                             )

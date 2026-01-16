@@ -22,3 +22,5 @@ var/
 
 # Jupyter Notebook
 .ipynb_checkpoints
+
+*.egg-info

@@ -50,6 +50,7 @@ A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, s
 
 ```
 paddleocr_vl_ov/
+├── client_app/                     # Desktop GUI client (PySide6) - see client_app/README.md
 ├── paddleocr_vl_openvino/          # Main package
 │   ├── paddleocr_vl/               # VLM model related code
 │   │   ├── ov_paddleocr_vl.py     # OpenVINO VLM model implementation
@@ -65,6 +66,12 @@ paddleocr_vl_ov/
 ├── build_wheel.py                  # Build script for whl package
 └── README.md                       # This file
 ```
+
+## 🖥️ Desktop GUI (Optional)
+
+If you want a desktop GUI (task queue + history + settings), see:
+
+- `client_app/README.md`
 
 ## 🔧 Installation
 
