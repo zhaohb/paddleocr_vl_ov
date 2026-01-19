@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._bind_actions()
         self._load_history()
+        self._load_pending_queue()
 
     def _cardify(self, w: QWidget) -> None:
         """
@@ -663,9 +664,92 @@ class MainWindow(QMainWindow):
                     self._tasks[row].task_type = v  # type: ignore[assignment]
                 except Exception:
                     self._tasks[row].task_type = "ocr"  # type: ignore[assignment]
+                # task_type 变化会影响 pending 队列的落盘内容
+                self._save_pending_queue()
 
         combo.currentTextChanged.connect(_on_changed)
         return combo
+
+    # ---------------- Queue persistence (pending tasks) ----------------
+    def _queue_file_path(self) -> Path:
+        """
+        pending 任务队列落盘文件（与输出目录绑定）。
+        格式：JSONL，每行一个任务：{input_path, task_type}
+        """
+        out_dir = Path(self.edit_output_dir.text().strip() or "output").resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        return out_dir / "_queue.jsonl"
+
+    def _save_pending_queue(self) -> None:
+        """
+        将当前队列中 status=pending 的任务写入 `_queue.jsonl`。
+        - 若无 pending 任务则删除该文件
+        - 仅保存必要信息：input_path + task_type
+        """
+        if self._worker and self._worker.isRunning():
+            return
+
+        p = self._queue_file_path()
+        pending = [t for t in self._tasks if getattr(t, "status", "") == "pending"]
+        try:
+            if not pending:
+                if p.exists():
+                    p.unlink()
+                return
+            with p.open("w", encoding="utf-8") as f:
+                for t in pending:
+                    payload = {
+                        "input_path": str(t.input_path),
+                        "task_type": str(getattr(t, "task_type", "ocr") or "ocr"),
+                    }
+                    f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        except Exception:
+            return
+
+    def _load_pending_queue(self) -> None:
+        """
+        从 `<输出目录>/_queue.jsonl` 恢复 pending 任务队列。
+        仅在非运行中执行；会覆盖当前任务队列（避免重复/混乱）。
+        """
+        if self._worker and self._worker.isRunning():
+            return
+
+        p = self._queue_file_path()
+        if not p.exists():
+            return
+
+        loaded: List[TaskItem] = []
+        try:
+            for line in p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+
+                in_path = Path(str(obj.get("input_path", "")).strip())
+                if not in_path.exists():
+                    continue
+                suf = in_path.suffix.lower()
+                if suf not in SUPPORTED_IMAGE_EXTS + SUPPORTED_DOC_EXTS:
+                    continue
+
+                task_type = obj.get("task_type", "ocr") or "ocr"
+                if task_type not in self.TASK_TYPE_OPTIONS:
+                    task_type = "ocr"
+                loaded.append(TaskItem(input_path=in_path, status="pending", task_type=task_type))  # type: ignore[arg-type]
+        except Exception:
+            loaded = []
+
+        if loaded:
+            self._tasks = loaded
+            self._archive_done_indices.clear()
+            self._running_task_idx = None
+            self._last_executed_idx = -1
+            self._refresh_table()
+            self._recompute_task_statuses()
 
     # ---------------- Actions ----------------
     def _append_log(self, msg: str) -> None:
@@ -692,6 +776,8 @@ class MainWindow(QMainWindow):
         self.edit_output_dir.setFocus()
         # 输出目录变更后，历史记录也切到对应目录
         self._load_history()
+        # 输出目录变更后，任务队列（pending）也切到对应目录
+        self._load_pending_queue()
 
     def _show_about(self) -> None:
         # 这里直接切到 About 页
@@ -705,6 +791,7 @@ class MainWindow(QMainWindow):
         self._archive_done_indices.clear()
         self.table.setRowCount(0)
         self.progress.setText("0/0")
+        self._save_pending_queue()
 
     def _delete_selected_tasks(self) -> None:
         """
@@ -746,6 +833,7 @@ class MainWindow(QMainWindow):
             self.progress.setText(f"0/{len(self._tasks)}")
         else:
             self.progress.setText("0/0")
+        self._save_pending_queue()
 
     def _start_screenshot(self) -> None:
         """
@@ -804,6 +892,7 @@ class MainWindow(QMainWindow):
                 self._maybe_add_file(p)
 
         self._refresh_table()
+        self._save_pending_queue()
 
     def _maybe_add_file(self, p: Path) -> None:
         if not p.exists():
@@ -1361,5 +1450,6 @@ class MainWindow(QMainWindow):
                     pass
         self._archive_done_indices.clear()
         self._refresh_table()
+        self._save_pending_queue()
 
 
