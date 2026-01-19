@@ -210,6 +210,16 @@ _T: Dict[str, Dict[Lang, str]] = {
         "en_US": "✅ Pipeline was initialized elsewhere; reusing it",
         "zh_TW": "✅ Pipeline 已在其他位置初始化，本次直接重用",
     },
+    "wk.local_layout_path": {
+        "zh_CN": "📌 使用本地 layout 模型：{path}",
+        "en_US": "📌 Using local layout model: {path}",
+        "zh_TW": "📌 使用本地 layout 模型：{path}",
+    },
+    "wk.local_vlm_path": {
+        "zh_CN": "📌 使用本地 VLM 模型：{path}",
+        "en_US": "📌 Using local VLM model: {path}",
+        "zh_TW": "📌 使用本地 VLM 模型：{path}",
+    },
     "wk.no_pending": {
         "zh_CN": "没有待执行（pending）的任务，直接结束。",
         "en_US": "No pending tasks. Exiting.",
@@ -219,6 +229,68 @@ _T: Dict[str, Dict[Lang, str]] = {
         "zh_CN": "❌ Pipeline 初始化失败：",
         "en_US": "❌ Pipeline initialization failed:",
         "zh_TW": "❌ Pipeline 初始化失敗：",
+    },
+
+    # Init error classification / hints
+    "wk.init_err.modelscope_timeout": {
+        "zh_CN": "ModelScope 下载失败：连接 www.modelscope.cn 超时/不可达。",
+        "en_US": "ModelScope download failed: connection to www.modelscope.cn timed out/unreachable.",
+        "zh_TW": "ModelScope 下載失敗：連線 www.modelscope.cn 超時/不可達。",
+    },
+    "wk.init_err.local_layout_missing": {
+        "zh_CN": "已设置本地 layout_model_path，但路径不存在：{path}",
+        "en_US": "Local layout_model_path is set, but the path does not exist: {path}",
+        "zh_TW": "已設定本地 layout_model_path，但路徑不存在：{path}",
+    },
+    "wk.init_err.local_layout_not_xml": {
+        "zh_CN": "已设置本地 layout_model_path，但不是 .xml 文件：{path}",
+        "en_US": "Local layout_model_path is set, but it is not a .xml file: {path}",
+        "zh_TW": "已設定本地 layout_model_path，但不是 .xml 檔案：{path}",
+    },
+    "wk.init_err.local_layout_no_xml": {
+        "zh_CN": "已设置本地 layout_model_path 为目录，但目录中未找到任何 .xml：{dir}",
+        "en_US": "Local layout_model_path is a directory, but no .xml files were found: {dir}",
+        "zh_TW": "已設定本地 layout_model_path 為目錄，但目錄中未找到任何 .xml：{dir}",
+    },
+    "wk.init_err.local_layout_no_bin": {
+        "zh_CN": "已设置本地 layout 模型，但缺少对应 .bin：xml={xml}  bin={bin}",
+        "en_US": "Local layout model is set, but the corresponding .bin is missing: xml={xml}  bin={bin}",
+        "zh_TW": "已設定本地 layout 模型，但缺少對應 .bin：xml={xml}  bin={bin}",
+    },
+    "wk.init_err.local_vlm_missing": {
+        "zh_CN": "已设置本地 vlm_model_path，但路径不存在：{path}",
+        "en_US": "Local vlm_model_path is set, but the path does not exist: {path}",
+        "zh_TW": "已設定本地 vlm_model_path，但路徑不存在：{path}",
+    },
+    "wk.init_err.local_vlm_not_dir": {
+        "zh_CN": "已设置本地 vlm_model_path，但它不是目录：{path}",
+        "en_US": "Local vlm_model_path is set, but it is not a directory: {path}",
+        "zh_TW": "已設定本地 vlm_model_path，但它不是目錄：{path}",
+    },
+    "wk.init_err.local_vlm_missing_files": {
+        "zh_CN": "已设置本地 VLM 模型目录，但缺少必要文件：{files}\n目录：{dir}",
+        "en_US": "Local VLM model directory is missing required files: {files}\nDir: {dir}",
+        "zh_TW": "已設定本地 VLM 模型目錄，但缺少必要檔案：{files}\n目錄：{dir}",
+    },
+    "wk.init_hint.net_check": {
+        "zh_CN": "请检查网络是否能访问 modelscope.cn（公司网络/防火墙/需要 VPN 等）。",
+        "en_US": "Check network access to modelscope.cn (firewall/corporate network/VPN).",
+        "zh_TW": "請檢查網路是否能存取 modelscope.cn（公司網路/防火牆/需要 VPN 等）。",
+    },
+    "wk.init_hint.proxy_check": {
+        "zh_CN": "如需代理，请在系统或环境变量中配置 HTTP(S) 代理后重试。",
+        "en_US": "If a proxy is required, configure HTTP(S) proxy in system/env vars and retry.",
+        "zh_TW": "如需代理，請在系統或環境變數中設定 HTTP(S) 代理後重試。",
+    },
+    "wk.init_hint.offline_local_paths": {
+        "zh_CN": "离线/不稳定网络：在【设置】里填写本地 layout_model_path（.xml）与 vlm_model_path（目录），避免自动下载。",
+        "en_US": "Offline/unstable network: set local layout_model_path (.xml) and vlm_model_path (folder) in Settings to skip auto-download.",
+        "zh_TW": "離線/不穩定網路：在【設定】填入本地 layout_model_path（.xml）與 vlm_model_path（資料夾），避免自動下載。",
+    },
+    "wk.init_hint.pre_download_copy_cache": {
+        "zh_CN": "也可在有网环境预下载后拷贝缓存目录（常见：%USERPROFILE%\\.cache\\modelscope\\hub\\models\\...）到目标机器。",
+        "en_US": "You can also pre-download on a machine with internet and copy the cache folder (often: %USERPROFILE%\\.cache\\modelscope\\hub\\models\\...).",
+        "zh_TW": "也可在有網環境預下載後複製快取目錄（常見：%USERPROFILE%\\.cache\\modelscope\\hub\\models\\...）到目標機器。",
     },
     "wk.stopped": {"zh_CN": "已停止", "en_US": "Stopped.", "zh_TW": "已停止"},
     "wk.processing": {

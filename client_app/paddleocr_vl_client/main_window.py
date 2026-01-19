@@ -111,6 +111,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._qsettings = QSettings()
         self._lang: Lang = normalize_lang(self._qsettings.value("ui/language", "zh_CN"))
+        # 读取/写入设置时用于抑制信号回调（避免 load 时触发 save / reload）
+        self._loading_settings: bool = False
         # 运行时主入口会再次覆盖（用于打包/多入口一致），这里给一个默认值
         self.setWindowTitle("PaddleOCR-VL OpenVINO APP")
         self.resize(1280, 820)
@@ -130,12 +132,111 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._bind_actions()
+        # 先加载设置（包含 output_dir），再加载与 output_dir 绑定的历史/队列
+        self._load_settings()
         self._load_history()
         self._load_pending_queue()
         self._apply_i18n()
 
     def _t(self, key: str, **kwargs) -> str:
         return t(key, self._lang, **kwargs)
+
+    def _qs_get_str(self, key: str, default: str = "") -> str:
+        try:
+            v = self._qsettings.value(key, default)
+        except Exception:
+            v = default
+        return "" if v is None else str(v)
+
+    def _qs_get_bool(self, key: str, default: bool = False) -> bool:
+        try:
+            v = self._qsettings.value(key, default)
+        except Exception:
+            return default
+        if isinstance(v, bool):
+            return v
+        s = str(v).strip().lower()
+        if s in ("1", "true", "yes", "y", "on"):
+            return True
+        if s in ("0", "false", "no", "n", "off"):
+            return False
+        return default
+
+    def _qs_get_int(self, key: str, default: int) -> int:
+        try:
+            v = self._qsettings.value(key, default)
+        except Exception:
+            return default
+        try:
+            return int(v)
+        except Exception:
+            return default
+
+    def _load_settings(self) -> None:
+        """
+        从 QSettings 恢复设置页配置（落盘的设置）。
+        注意：必须在 _build_ui() 后调用（控件已创建）。
+        """
+        self._loading_settings = True
+        try:
+            # Paths
+            self.edit_layout_model.setText(self._qs_get_str("settings/layout_model_path", self.edit_layout_model.text()))
+            self.edit_vlm_model.setText(self._qs_get_str("settings/vlm_model_path", self.edit_vlm_model.text()))
+            self.edit_cache_dir.setText(self._qs_get_str("settings/cache_dir", self.edit_cache_dir.text()))
+
+            # Devices / precision
+            self.combo_vlm_device.setCurrentText(self._qs_get_str("settings/vlm_device", self.combo_vlm_device.currentText()))
+            self.combo_layout_device.setCurrentText(self._qs_get_str("settings/layout_device", self.combo_layout_device.currentText()))
+            self.combo_layout_precision.setCurrentText(self._qs_get_str("settings/layout_precision", self.combo_layout_precision.currentText()))
+
+            # Predict
+            self.chk_use_layout.setChecked(self._qs_get_bool("settings/use_layout_detection", self.chk_use_layout.isChecked()))
+            thresh = self._qs_get_int("settings/layout_threshold_pct", self.slider_layout_thresh.value())
+            self.slider_layout_thresh.setValue(max(self.slider_layout_thresh.minimum(), min(self.slider_layout_thresh.maximum(), thresh)))
+            self._sync_layout_thresh_label()
+            self.spin_max_tokens.setValue(self._qs_get_int("settings/max_new_tokens", int(self.spin_max_tokens.value())))
+
+            # Quant switches
+            self.chk_llm_int4.setChecked(self._qs_get_bool("settings/llm_int4_compress", self.chk_llm_int4.isChecked()))
+            self.chk_vision_int8.setChecked(self._qs_get_bool("settings/vision_int8_quant", self.chk_vision_int8.isChecked()))
+            self.chk_llm_int8_compress.setChecked(self._qs_get_bool("settings/llm_int8_compress", self.chk_llm_int8_compress.isChecked()))
+            self.chk_llm_int8_quant.setChecked(self._qs_get_bool("settings/llm_int8_quant", self.chk_llm_int8_quant.isChecked()))
+
+            # Output dir
+            out_dir = self._qs_get_str("settings/output_dir", self.edit_output_dir.text())
+            if out_dir.strip():
+                self.edit_output_dir.setText(out_dir.strip())
+        finally:
+            self._loading_settings = False
+
+    def _save_settings(self) -> None:
+        """
+        将设置页配置写入 QSettings，便于下次启动复用。
+        """
+        if self._loading_settings:
+            return
+        try:
+            self._qsettings.setValue("settings/layout_model_path", self.edit_layout_model.text().strip())
+            self._qsettings.setValue("settings/vlm_model_path", self.edit_vlm_model.text().strip())
+            self._qsettings.setValue("settings/cache_dir", self.edit_cache_dir.text().strip())
+
+            self._qsettings.setValue("settings/vlm_device", self.combo_vlm_device.currentText())
+            self._qsettings.setValue("settings/layout_device", self.combo_layout_device.currentText())
+            self._qsettings.setValue("settings/layout_precision", self.combo_layout_precision.currentText())
+
+            self._qsettings.setValue("settings/use_layout_detection", bool(self.chk_use_layout.isChecked()))
+            self._qsettings.setValue("settings/layout_threshold_pct", int(self.slider_layout_thresh.value()))
+            self._qsettings.setValue("settings/max_new_tokens", int(self.spin_max_tokens.value()))
+
+            self._qsettings.setValue("settings/llm_int4_compress", bool(self.chk_llm_int4.isChecked()))
+            self._qsettings.setValue("settings/vision_int8_quant", bool(self.chk_vision_int8.isChecked()))
+            self._qsettings.setValue("settings/llm_int8_compress", bool(self.chk_llm_int8_compress.isChecked()))
+            self._qsettings.setValue("settings/llm_int8_quant", bool(self.chk_llm_int8_quant.isChecked()))
+
+            self._qsettings.setValue("settings/output_dir", self.edit_output_dir.text().strip())
+        except Exception:
+            # 设置写盘失败不影响主流程
+            pass
 
     def _set_language(self, lang: str) -> None:
         self._lang = normalize_lang(lang)
@@ -794,6 +895,25 @@ class MainWindow(QMainWindow):
         self.btn_hist_delete.clicked.connect(self._delete_selected_history)
         self.btn_hist_clear.clicked.connect(self._clear_history)
 
+        # Settings persistence: any changes should be written to QSettings
+        self.edit_layout_model.editingFinished.connect(self._save_settings)
+        self.edit_vlm_model.editingFinished.connect(self._save_settings)
+        self.edit_cache_dir.editingFinished.connect(self._save_settings)
+        self.edit_output_dir.editingFinished.connect(self._save_settings)
+
+        self.combo_vlm_device.currentIndexChanged.connect(lambda _: self._save_settings())
+        self.combo_layout_device.currentIndexChanged.connect(lambda _: self._save_settings())
+        self.combo_layout_precision.currentIndexChanged.connect(lambda _: self._save_settings())
+
+        self.chk_use_layout.toggled.connect(lambda _: self._save_settings())
+        self.slider_layout_thresh.valueChanged.connect(lambda _: self._save_settings())
+        self.spin_max_tokens.valueChanged.connect(lambda _: self._save_settings())
+
+        self.chk_llm_int4.toggled.connect(lambda _: self._save_settings())
+        self.chk_vision_int8.toggled.connect(lambda _: self._save_settings())
+        self.chk_llm_int8_compress.toggled.connect(lambda _: self._save_settings())
+        self.chk_llm_int8_quant.toggled.connect(lambda _: self._save_settings())
+
     def _on_use_layout_toggled(self, checked: bool) -> None:
         """
         开关布局检测时，控制“任务类型”是否可编辑：
@@ -932,6 +1052,7 @@ class MainWindow(QMainWindow):
             return
         self.edit_output_dir.setText(d)
         self.edit_output_dir.setFocus()
+        self._save_settings()
         # 输出目录变更后，历史记录也切到对应目录
         self._load_history()
         # 输出目录变更后，任务队列（pending）也切到对应目录

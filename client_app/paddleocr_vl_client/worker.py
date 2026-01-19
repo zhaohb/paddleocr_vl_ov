@@ -87,6 +87,106 @@ class InferenceWorker(QThread):
     def _log(self, msg: str) -> None:
         self.signals.log.emit(msg)
 
+    @staticmethod
+    def _strip_quotes(s: str) -> str:
+        v = (s or "").strip()
+        if len(v) >= 2 and ((v[0] == v[-1] == '"') or (v[0] == v[-1] == "'")):
+            return v[1:-1].strip()
+        return v
+
+    def _validate_static_model_paths(self) -> tuple[Optional[str], Optional[str]]:
+        """
+        如果用户在设置里显式填写了本地模型路径，则做强校验：
+        - 路径无效/缺文件：直接报错提示用户修复（不允许回退到 ModelScope 自动下载）
+        - 路径有效：允许继续初始化
+        """
+        cfg = self._init_cfg
+        resolved_layout_xml: Optional[str] = None
+        resolved_vlm_dir: Optional[str] = None
+
+        # layout model
+        if cfg.layout_model_path:
+            p = Path(self._strip_quotes(cfg.layout_model_path)).expanduser()
+            if not p.exists():
+                raise FileNotFoundError(self._t("wk.init_err.local_layout_missing", path=str(p)))
+
+            # directory: pick xml by precision preference
+            if p.is_dir():
+                precision_map = {
+                    "fp16": ["pp_doclayoutv2_f16.xml", "*.xml"],
+                    "fp32": ["pp_doclayoutv2_f32.xml", "*.xml"],
+                    "combined_fp16": ["pp_doclayoutv2_f16_combined.xml", "pp_doclayoutv2_f16.xml", "*.xml"],
+                    "combined_fp32": ["pp_doclayoutv2_f32_combined.xml", "pp_doclayoutv2_f32.xml", "*.xml"],
+                }
+                patterns = precision_map.get(cfg.layout_precision, ["*.xml"])
+                xml_file: Optional[Path] = None
+                for pat in patterns:
+                    if pat == "*.xml":
+                        xs = list(p.glob("*.xml"))
+                        if xs:
+                            xml_file = xs[0]
+                        break
+                    cand = p / pat
+                    if cand.exists():
+                        xml_file = cand
+                        break
+                if xml_file is None:
+                    raise FileNotFoundError(self._t("wk.init_err.local_layout_no_xml", dir=str(p)))
+                bin_path = xml_file.with_suffix(".bin")
+                if not bin_path.exists():
+                    raise FileNotFoundError(self._t("wk.init_err.local_layout_no_bin", xml=str(xml_file), bin=str(bin_path)))
+                resolved_layout_xml = str(xml_file)
+
+            # file: must be .xml and have .bin
+            elif p.is_file():
+                if p.suffix.lower() != ".xml":
+                    raise FileNotFoundError(self._t("wk.init_err.local_layout_not_xml", path=str(p)))
+                bin_path = p.with_suffix(".bin")
+                if not bin_path.exists():
+                    raise FileNotFoundError(self._t("wk.init_err.local_layout_no_bin", xml=str(p), bin=str(bin_path)))
+                resolved_layout_xml = str(p)
+
+        # VLM model
+        if cfg.vlm_model_path:
+            p = Path(self._strip_quotes(cfg.vlm_model_path)).expanduser()
+            if not p.exists():
+                raise FileNotFoundError(self._t("wk.init_err.local_vlm_missing", path=str(p)))
+            if not p.is_dir():
+                raise FileNotFoundError(self._t("wk.init_err.local_vlm_not_dir", path=str(p)))
+            required = ["vision.xml", "llm_stateful.xml", "llm_embd.xml"]
+            missing = [name for name in required if not (p / name).exists()]
+            if missing:
+                raise FileNotFoundError(self._t("wk.init_err.local_vlm_missing_files", dir=str(p), files=", ".join(missing)))
+            resolved_vlm_dir = str(p)
+
+        return resolved_layout_xml, resolved_vlm_dir
+
+    def _classify_init_error(self, e: Exception) -> tuple[str, list[str]]:
+        """
+        将初始化异常转换为更友好的用户提示。
+        返回：(简短原因, 操作建议列表)
+        """
+        msg = str(e) or repr(e)
+        msg_l = msg.lower()
+
+        # ModelScope / requests / urllib3 常见网络失败（超时/无法连接/重试耗尽）
+        is_modelscope = ("modelscope" in msg_l) or ("www.modelscope.cn" in msg_l) or ("modelscope.cn" in msg_l)
+        is_timeout = ("timed out" in msg_l) or ("connecttimeout" in msg_l) or ("timeout" in msg_l) or ("winerror 10060" in msg_l)
+        is_conn = ("max retries exceeded" in msg_l) or ("failed to establish a new connection" in msg_l) or ("connection error" in msg_l)
+
+        if is_modelscope and (is_timeout or is_conn):
+            reason = self._t("wk.init_err.modelscope_timeout")
+            hints = [
+                self._t("wk.init_hint.net_check"),
+                self._t("wk.init_hint.proxy_check"),
+                self._t("wk.init_hint.offline_local_paths"),
+                self._t("wk.init_hint.pre_download_copy_cache"),
+            ]
+            return reason, hints
+
+        # 默认：不做特殊分类
+        return msg, []
+
     def _init_pipeline(self) -> None:
         from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
@@ -130,6 +230,12 @@ class InferenceWorker(QThread):
 
         # 锁外初始化新 Pipeline（可能耗时）
         self._log(self._t("wk.init_pipeline"))
+        # 如果用户显式填写了本地模型路径，则先做强校验：避免网络不通时仍尝试自动下载。
+        local_layout_xml, local_vlm_dir = self._validate_static_model_paths()
+        if local_layout_xml:
+            self._log(self._t("wk.local_layout_path", path=local_layout_xml))
+        if local_vlm_dir:
+            self._log(self._t("wk.local_vlm_path", path=local_vlm_dir))
         new_pipe = PaddleOCRVL(
             layout_model_path=cfg.layout_model_path or None,
             vlm_model_path=cfg.vlm_model_path or None,
@@ -287,10 +393,14 @@ class InferenceWorker(QThread):
             self._init_pipeline()
         except Exception as e:
             self._log(self._t("wk.init_failed_prefix"))
-            self._log(str(e))
+            reason, hints = self._classify_init_error(e)
+            self._log(reason)
+            for h in hints:
+                self._log(f"- {h}")
             self._log(traceback.format_exc())
             for i in runnable_indices:
-                self.signals.task_failed.emit(i, self._t("wk.err.init_failed_task", err=str(e)))
+                # 对 UI 的错误提示也用更短的 reason，避免一长串堆栈影响可读性
+                self.signals.task_failed.emit(i, self._t("wk.err.init_failed_task", err=reason))
             return
 
         ensure_dir(self._output_root)
