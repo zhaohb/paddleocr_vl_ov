@@ -3,7 +3,7 @@
 # PyInstaller spec for PaddleOCR-VL OpenVINO Desktop APP
 #
 # Notes:
-# - Prefer onedir: large runtime deps (OpenVINO + Qt)
+# - For a single-file executable (onefile), remove COLLECT and let EXE bundle everything.
 # - We intentionally collect openvino submodules to avoid runtime import issues.
 
 from pathlib import Path
@@ -69,16 +69,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="PaddleOCRVL-APP",
 )
 
 
