@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for PaddleOCR-VL OpenVINO Desktop Client
+# PyInstaller spec for PaddleOCR-VL OpenVINO Desktop APP
 #
 # Notes:
 # - Prefer onedir: large runtime deps (OpenVINO + Qt)
@@ -57,7 +57,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="PaddleOCRVL-Client",
+    name="PaddleOCRVL-APP",
     icon=ICON_FILE,
     debug=False,
     bootloader_ignore_signals=False,
@@ -78,7 +78,7 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="PaddleOCRVL-Client",
+    name="PaddleOCRVL-APP",
 )
 
 

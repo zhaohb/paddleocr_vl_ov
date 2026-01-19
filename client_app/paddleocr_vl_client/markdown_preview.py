@@ -8,6 +8,8 @@ from typing import Optional
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import QTextBrowser, QWidget, QVBoxLayout
 
+from .i18n import Lang, normalize_lang, t
+
 
 class MarkdownPreviewWidget(QWidget):
     """
@@ -24,6 +26,7 @@ class MarkdownPreviewWidget(QWidget):
         super().__init__(parent)
         self._base_dir: Optional[Path] = None
         self._engine = "text"  # text|web
+        self._lang: Lang = "zh_CN"
 
         self._text = QTextBrowser()
         self._text.setOpenExternalLinks(True)
@@ -45,6 +48,9 @@ class MarkdownPreviewWidget(QWidget):
         except Exception:
             # 降级：仍然可用，只是不支持 LaTeX/mermaid 等 JS 能力
             self._engine = "text"
+
+    def set_lang(self, lang: str) -> None:
+        self._lang = normalize_lang(lang)
 
     def set_markdown(self, md: str, base_dir: Optional[Path] = None) -> None:
         self._base_dir = base_dir
@@ -68,6 +74,8 @@ class MarkdownPreviewWidget(QWidget):
         md_json = json.dumps(md)
         # 大文档性能保护：结果过大时，禁用部分重渲染能力，优先保证滚动流畅
         perf_mode = len(md) >= 200_000
+        missing_md_it_msg = json.dumps(t("md.err.markdownit_missing", self._lang))
+        perf_hint_msg = json.dumps(t("md.hint.perf_mode", self._lang))
 
         def _app_root() -> Path:
             # 打包后：优先从 PyInstaller 的 _MEIPASS 取资源目录
@@ -176,7 +184,7 @@ class MarkdownPreviewWidget(QWidget):
     if (typeof window.markdownit !== 'function') {{
       const container = document.getElementById('app');
       container.innerHTML = '<div style=\"color:#B42318;background:#FEE4E2;padding:10px;border-radius:10px;\">' +
-        'Markdown 渲染依赖未加载（markdown-it）。请检查 assets 是否存在或网络策略是否拦截了资源加载。' +
+        {missing_md_it_msg} +
         '</div><pre style=\"white-space:pre-wrap;\">' + mdText.replace(/[<>&]/g, c => ({{'<':'&lt;','>':'&gt;','&':'&amp;'}}[c])) + '</pre>';
       throw new Error('markdown-it not loaded');
     }}
@@ -205,7 +213,7 @@ class MarkdownPreviewWidget(QWidget):
     if (perfMode) {{
       const hint = document.createElement('div');
       hint.className = 'perf-hint';
-      hint.textContent = '性能模式已启用：为提升滚动流畅度，已关闭代码高亮/公式渲染/mermaid 渲染。';
+      hint.textContent = {perf_hint_msg};
       container.appendChild(hint);
     }}
     const content = document.createElement('div');

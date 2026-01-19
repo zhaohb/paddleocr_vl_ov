@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple, Any
 from PySide6.QtCore import QObject, QThread, Signal
 
 from .pdf_utils import is_pdf, render_pdf_to_images
+from .i18n import Lang, normalize_lang, t
 from .types import (
     PipelineInitConfig,
     PredictConfig,
@@ -62,6 +63,7 @@ class InferenceWorker(QThread):
         init_cfg: PipelineInitConfig,
         pred_cfg: PredictConfig,
         run_indices: Optional[List[int]] = None,
+        lang: str = "zh_CN",
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent)
@@ -74,6 +76,10 @@ class InferenceWorker(QThread):
         self._stop_requested = False
 
         self._pipeline = None
+        self._lang: Lang = normalize_lang(lang)
+
+    def _t(self, key: str, **kwargs) -> str:
+        return t(key, self._lang, **kwargs)
 
     def request_stop(self) -> None:
         self._stop_requested = True
@@ -98,7 +104,7 @@ class InferenceWorker(QThread):
         with _PIPELINE_LOCK:
             if _PIPELINE_INSTANCE is not None and _PIPELINE_FINGERPRINT == fp:
                 self._pipeline = _PIPELINE_INSTANCE
-                self._log("✅ 复用已加载的 Pipeline（模型不再重复初始化）")
+                self._log(self._t("wk.reuse_pipeline"))
                 return
 
             old_pipe = _PIPELINE_INSTANCE
@@ -107,7 +113,7 @@ class InferenceWorker(QThread):
 
         # 锁外释放旧实例（真正做到“先清理旧，再创建新”）
         if old_pipe is not None:
-            self._log("♻️  配置发生变化：预先释放旧 Pipeline...")
+            self._log(self._t("wk.pre_release_old"))
             try:
                 if hasattr(old_pipe, "close") and callable(getattr(old_pipe, "close")):
                     old_pipe.close()  # type: ignore[attr-defined]
@@ -123,7 +129,7 @@ class InferenceWorker(QThread):
                 pass
 
         # 锁外初始化新 Pipeline（可能耗时）
-        self._log("初始化 Pipeline ...（首次/配置变化时可能会下载模型）")
+        self._log(self._t("wk.init_pipeline"))
         new_pipe = PaddleOCRVL(
             layout_model_path=cfg.layout_model_path or None,
             vlm_model_path=cfg.vlm_model_path or None,
@@ -147,14 +153,14 @@ class InferenceWorker(QThread):
                 except Exception:
                     pass
                 self._pipeline = _PIPELINE_INSTANCE
-                self._log("✅ Pipeline 已在其他位置初始化，本次直接复用")
+                self._log(self._t("wk.pipeline_ready_other"))
                 return
 
             prev = _PIPELINE_INSTANCE
             _PIPELINE_INSTANCE = new_pipe
             _PIPELINE_FINGERPRINT = fp
             self._pipeline = new_pipe
-            self._log("✅ Pipeline 初始化完成")
+            self._log(self._t("wk.pipeline_ready"))
 
         # 若出现极小概率并发不同配置实例，这里补一次释放
         if prev is not None:
@@ -213,7 +219,7 @@ class InferenceWorker(QThread):
         )
         output = list(gen)
         if not output:
-            raise RuntimeError("未检测到任何内容")
+            raise RuntimeError(self._t("wk.err.no_content"))
         return output[0]
 
     def _predict_task(self, task: TaskItem, task_out_dir: Path) -> Tuple[str, str, Optional[object], str, Optional[Any]]:
@@ -225,7 +231,7 @@ class InferenceWorker(QThread):
             # PDF：渲染为多页图片，再逐页推理，最后拼接 markdown
             pages_dir = task_out_dir / "pages"
             ensure_dir(pages_dir)
-            pages = render_pdf_to_images(in_path, pages_dir)
+            pages = render_pdf_to_images(in_path, pages_dir, lang=self._lang)
             task.pdf_pages_dir = pages_dir
             if pages:
                 task.preview_input_image_path = pages[0].image_path
@@ -234,8 +240,8 @@ class InferenceWorker(QThread):
             first_vis = None
             for p in pages:
                 if self._stop_requested:
-                    raise RuntimeError("用户停止")
-                self._log(f"  - PDF Page {p.page_index + 1}/{len(pages)}: {p.image_path.name}")
+                    raise RuntimeError(self._t("wk.err.user_stop"))
+                self._log(self._t("wk.pdf_page", i=p.page_index + 1, n=len(pages), name=p.image_path.name))
                 prompt_label = "ocr" if self._pred_cfg.use_layout_detection else (task.task_type or "ocr")
                 res = self._predict_one_image(p.image_path, prompt_label=prompt_label)
                 md, js = self._extract_texts(res)
@@ -273,25 +279,25 @@ class InferenceWorker(QThread):
             runnable_indices = [i for i, t in enumerate(self._tasks) if t.status not in ("done", "error")]
         total = len(runnable_indices)
         if total == 0:
-            self._log("没有待执行（pending）的任务，直接结束。")
+            self._log(self._t("wk.no_pending"))
             self.signals.progress.emit(0, 0)
             return
 
         try:
             self._init_pipeline()
         except Exception as e:
-            self._log("❌ Pipeline 初始化失败：")
+            self._log(self._t("wk.init_failed_prefix"))
             self._log(str(e))
             self._log(traceback.format_exc())
             for i in runnable_indices:
-                self.signals.task_failed.emit(i, f"Pipeline 初始化失败: {e}")
+                self.signals.task_failed.emit(i, self._t("wk.err.init_failed_task", err=str(e)))
             return
 
         ensure_dir(self._output_root)
 
         for step_idx, idx in enumerate(runnable_indices):
             if self._stop_requested:
-                self._log("已停止")
+                self._log(self._t("wk.stopped"))
                 break
 
             self.signals.progress.emit(step_idx, total)
@@ -304,7 +310,7 @@ class InferenceWorker(QThread):
                 ensure_dir(task_out_dir)
                 task.output_dir = task_out_dir
 
-                self._log(f"开始处理：{task.input_path}")
+                self._log(self._t("wk.processing", path=str(task.input_path)))
                 md, js, vis_pil, summary, res_obj = self._predict_task(task, task_out_dir)
 
                 # 结果写盘：
@@ -323,7 +329,7 @@ class InferenceWorker(QThread):
                         json_path = task_out_dir / f"{stem}_res.json"
                     except Exception as e:
                         # 回退到简单写盘
-                        self._log(f"⚠️ 使用 save_to_* 失败，回退到直接写盘: {e}")
+                        self._log(self._t("wk.fallback_save", err=str(e)))
 
                 if md_path is None:
                     md_path = task_out_dir / "result.md"
@@ -363,12 +369,12 @@ class InferenceWorker(QThread):
                 else:
                     self.signals.preview_ready.emit(idx, None, md, js)
 
-                self._log(f"✅ 完成：{task.input_path} -> {task_out_dir}")
+                self._log(self._t("wk.done", path=str(task.input_path), out_dir=str(task_out_dir)))
                 self.signals.task_finished.emit(idx)
             except Exception as e:
                 task.status = "error"
                 task.error = f"{e}\n{traceback.format_exc()}"
-                self._log(f"❌ 失败：{task.input_path}")
+                self._log(self._t("wk.failed", path=str(task.input_path)))
                 self._log(task.error)
                 self.signals.task_failed.emit(idx, str(e))
 

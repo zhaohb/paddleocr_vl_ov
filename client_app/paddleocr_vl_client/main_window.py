@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Set
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
 from PySide6.QtGui import QAction, QPixmap, QColor, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -53,6 +53,7 @@ from .worker import InferenceWorker
 from .screenshot_overlay import ScreenshotOverlay, ScreenshotResult
 from .markdown_preview import MarkdownPreviewWidget
 from .pdf_utils import is_pdf
+from .i18n import LANG_DISPLAY, Lang, normalize_lang, t
 
 
 class DropArea(QFrame):
@@ -108,8 +109,10 @@ class MainWindow(QMainWindow):
     TASK_TYPE_OPTIONS: List[TaskType] = ["ocr", "table", "chart", "formula"]
     def __init__(self) -> None:
         super().__init__()
+        self._qsettings = QSettings()
+        self._lang: Lang = normalize_lang(self._qsettings.value("ui/language", "zh_CN"))
         # 运行时主入口会再次覆盖（用于打包/多入口一致），这里给一个默认值
-        self.setWindowTitle("PaddleOCR-VL OpenVINO Client")
+        self.setWindowTitle("PaddleOCR-VL OpenVINO APP")
         self.resize(1280, 820)
 
         self._tasks: List[TaskItem] = []
@@ -129,6 +132,142 @@ class MainWindow(QMainWindow):
         self._bind_actions()
         self._load_history()
         self._load_pending_queue()
+        self._apply_i18n()
+
+    def _t(self, key: str, **kwargs) -> str:
+        return t(key, self._lang, **kwargs)
+
+    def _set_language(self, lang: str) -> None:
+        self._lang = normalize_lang(lang)
+        try:
+            self._qsettings.setValue("ui/language", self._lang)
+        except Exception:
+            pass
+        self._apply_i18n()
+
+    def _apply_i18n(self) -> None:
+        """
+        Apply translated texts to all UI widgets.
+        Keep this method idempotent so it can be called repeatedly when language changes.
+        """
+        # Window / actions
+        self.setWindowTitle(self._t("app.title"))
+        self.action_add_files.setText(self._t("action.add_files"))
+        self.action_clear.setText(self._t("action.clear"))
+        self.action_screenshot.setText(self._t("action.screenshot"))
+        self.action_choose_output.setText(self._t("action.output_dir"))
+        self.action_build_info.setText(self._t("action.about"))
+
+        # Navigation
+        self._nav_item_ocr.setText(self._t("nav.ocr"))
+        self._nav_item_history.setText(self._t("nav.history"))
+        self._nav_item_settings.setText(self._t("nav.settings"))
+        self._nav_item_about.setText(self._t("nav.about"))
+
+        # OCR page
+        try:
+            self.drop_area.title.setText(self._t("drop.title"))
+            self.drop_area.hint.setText(self._t("drop.hint"))
+        except Exception:
+            pass
+        self.lbl_task_queue_title.setText(self._t("card.task_queue"))
+        self.lbl_log_title.setText(self._t("card.logs"))
+        self.log.setPlaceholderText(self._t("log.placeholder"))
+        self.lbl_progress_prefix.setText(self._t("progress.label"))
+
+        self.btn_run.setText(self._t("btn.start"))
+        self.btn_stop.setText(self._t("btn.stop"))
+        self.btn_rerun_selected.setText(self._t("btn.rerun_selected"))
+        self.btn_delete_selected.setText(self._t("btn.delete_selected"))
+        self.btn_screenshot.setText(self._t("btn.screenshot"))
+
+        self.table.setHorizontalHeaderLabels(
+            [
+                self._t("table.file"),
+                self._t("table.type"),
+                self._t("table.task_type"),
+                self._t("table.status"),
+                self._t("table.output_dir"),
+            ]
+        )
+        # 语言切换时刷新“状态”列显示文本（内部状态仍是 pending/running/done/error）
+        try:
+            for i in range(len(self._tasks)):
+                self._set_row_status(i)
+        except Exception:
+            pass
+
+        # Settings page
+        self.lbl_settings_title.setText(self._t("settings.title"))
+        self.lbl_ui_language.setText(self._t("settings.language"))
+        self.lbl_output_dir_row.setText(self._t("settings.output_dir"))
+        self.edit_layout_model.setPlaceholderText(self._t("ph.layout_model"))
+        self.edit_vlm_model.setPlaceholderText(self._t("ph.vlm_model"))
+        self.edit_cache_dir.setPlaceholderText(self._t("ph.cache_dir"))
+        self.chk_use_layout.setText(self._t("settings.use_layout"))
+        self.btn_pick_output.setText(self._t("btn.choose"))
+        self.lbl_settings_note.setText(self._t("settings.note"))
+        self.chk_llm_int4.setText(self._t("settings.llm_int4"))
+        self.chk_vision_int8.setText(self._t("settings.vision_int8"))
+        self.chk_llm_int8_compress.setText(self._t("settings.llm_int8_compress"))
+        self.chk_llm_int8_quant.setText(self._t("settings.llm_int8_quant"))
+
+        # Ensure language combobox selection matches current language
+        try:
+            idx = self._ui_language_codes.index(self._lang)
+        except Exception:
+            idx = 0
+        if self.combo_ui_language.currentIndex() != idx:
+            self.combo_ui_language.blockSignals(True)
+            self.combo_ui_language.setCurrentIndex(idx)
+            self.combo_ui_language.blockSignals(False)
+
+        # History page
+        self.lbl_history_title.setText(self._t("history.title"))
+        self.btn_hist_open_out.setText(self._t("history.open_out"))
+        self.btn_hist_delete.setText(self._t("history.delete_selected"))
+        self.btn_hist_clear.setText(self._t("history.clear"))
+        self.history_table.setHorizontalHeaderLabels(
+            [
+                self._t("history.col.time"),
+                self._t("history.col.file"),
+                self._t("history.col.type"),
+                self._t("history.col.task_type"),
+                self._t("history.col.output_dir"),
+                self._t("history.col.summary"),
+            ]
+        )
+        # 空态占位：若当前没有选中历史行，则应随语言切换即时刷新占位文本
+        try:
+            has_sel = bool(self.history_table.selectionModel().selectedRows())
+        except Exception:
+            has_sel = False
+        if not has_sel:
+            self.hist_detail.setText(self._t("history.detail.placeholder"))
+            # 只有在未展示图片（无 pixmap）时，才写占位文本
+            try:
+                if self.hist_input_image.pixmap() is None:
+                    self.hist_input_image.setText(self._t("history.input_preview"))
+            except Exception:
+                self.hist_input_image.setText(self._t("history.input_preview"))
+            try:
+                if self.hist_output_image.pixmap() is None:
+                    self.hist_output_image.setText(self._t("history.output_preview"))
+            except Exception:
+                self.hist_output_image.setText(self._t("history.output_preview"))
+        self.hist_preview_tabs.setTabText(0, self._t("history.tab.compare"))
+        self.hist_preview_tabs.setTabText(1, self._t("history.tab.output"))
+
+        # About page (may not exist if UI build changed)
+        if hasattr(self, "lbl_about_title"):
+            self.lbl_about_title.setText(self._t("about.title"))
+        if hasattr(self, "lbl_about_text"):
+            self.lbl_about_text.setText(self._t("about.text"))
+        try:
+            if hasattr(self, "hist_markdown_preview"):
+                self.hist_markdown_preview.set_lang(self._lang)
+        except Exception:
+            pass
 
     def _cardify(self, w: QWidget) -> None:
         """
@@ -225,11 +364,11 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        self.action_add_files = QAction("添加文件", self)
-        self.action_clear = QAction("清空", self)
-        self.action_screenshot = QAction("截图", self)
-        self.action_choose_output = QAction("输出目录", self)
-        self.action_build_info = QAction("关于", self)
+        self.action_add_files = QAction("", self)
+        self.action_clear = QAction("", self)
+        self.action_screenshot = QAction("", self)
+        self.action_choose_output = QAction("", self)
+        self.action_build_info = QAction("", self)
 
         # 给工具栏 action 加上系统图标（无需额外资源）
         st = QApplication.style()
@@ -275,10 +414,15 @@ class MainWindow(QMainWindow):
             }
             """
         )
-        self.nav.addItem(QListWidgetItem("OCR / 解析"))
-        self.nav.addItem(QListWidgetItem("历史任务"))
-        self.nav.addItem(QListWidgetItem("设置"))
-        self.nav.addItem(QListWidgetItem("关于"))
+        # Keep item references so we can update texts when language changes.
+        self._nav_item_ocr = QListWidgetItem("")
+        self._nav_item_history = QListWidgetItem("")
+        self._nav_item_settings = QListWidgetItem("")
+        self._nav_item_about = QListWidgetItem("")
+        self.nav.addItem(self._nav_item_ocr)
+        self.nav.addItem(self._nav_item_history)
+        self.nav.addItem(self._nav_item_settings)
+        self.nav.addItem(self._nav_item_about)
         self.nav.setCurrentRow(0)
         root_splitter.addWidget(self.nav)
 
@@ -335,20 +479,20 @@ class MainWindow(QMainWindow):
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(8)
-        title = QLabel("任务队列")
-        title.setStyleSheet("font-weight:700; color:#111;")
-        header_row.addWidget(title)
+        self.lbl_task_queue_title = QLabel("")
+        self.lbl_task_queue_title.setStyleSheet("font-weight:700; color:#111;")
+        header_row.addWidget(self.lbl_task_queue_title)
         header_row.addStretch(1)
 
-        self.btn_run = QPushButton("开始")
-        self.btn_rerun_selected = QPushButton("重跑所选")
+        self.btn_run = QPushButton("")
+        self.btn_rerun_selected = QPushButton("")
         self.btn_rerun_selected.setObjectName("SecondaryButton")
-        self.btn_delete_selected = QPushButton("删除所选")
+        self.btn_delete_selected = QPushButton("")
         self.btn_delete_selected.setObjectName("SecondaryButton")
-        self.btn_stop = QPushButton("停止")
+        self.btn_stop = QPushButton("")
         self.btn_stop.setObjectName("DangerButton")
         self.btn_stop.setEnabled(False)
-        self.btn_screenshot = QPushButton("截图")
+        self.btn_screenshot = QPushButton("")
         self.btn_screenshot.setObjectName("SecondaryButton")
         # 头部按钮更紧凑，避免占用过多横向空间
         for b in (self.btn_run, self.btn_rerun_selected, self.btn_delete_selected, self.btn_screenshot, self.btn_stop):
@@ -361,7 +505,7 @@ class MainWindow(QMainWindow):
         task_layout.addLayout(header_row)
 
         self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["文件", "类型", "任务类型", "状态", "输出目录"])
+        self.table.setHorizontalHeaderLabels(["", "", "", "", ""])
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
@@ -383,7 +527,8 @@ class MainWindow(QMainWindow):
         footer_row = QHBoxLayout()
         self.progress = QLabel("0/0")
         self.progress.setStyleSheet("color:#667085;")
-        footer_row.addWidget(QLabel("进度："))
+        self.lbl_progress_prefix = QLabel("")
+        footer_row.addWidget(self.lbl_progress_prefix)
         footer_row.addWidget(self.progress)
         footer_row.addStretch(1)
         task_layout.addLayout(footer_row)
@@ -396,12 +541,12 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(log_card)
         log_layout.setContentsMargins(12, 12, 12, 12)
         log_layout.setSpacing(8)
-        log_title = QLabel("日志")
-        log_title.setStyleSheet("font-weight:700; color:#111;")
-        log_layout.addWidget(log_title)
+        self.lbl_log_title = QLabel("")
+        self.lbl_log_title.setStyleSheet("font-weight:700; color:#111;")
+        log_layout.addWidget(self.lbl_log_title)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setPlaceholderText("日志输出 ...")
+        self.log.setPlaceholderText("")
         self.log.setMaximumBlockCount(5000)
         self.log.setStyleSheet("border:1px solid #E2E6EA; border-radius:10px; background:#FFFFFF;")
         log_layout.addWidget(self.log, stretch=1)
@@ -421,11 +566,11 @@ class MainWindow(QMainWindow):
         form.setLabelAlignment(Qt.AlignRight)
 
         self.edit_layout_model = QLineEdit()
-        self.edit_layout_model.setPlaceholderText("布局模型路径（留空=自动下载）")
+        self.edit_layout_model.setPlaceholderText("")
         self.edit_vlm_model = QLineEdit()
-        self.edit_vlm_model.setPlaceholderText("VLM 模型路径（留空=自动下载）")
+        self.edit_vlm_model.setPlaceholderText("")
         self.edit_cache_dir = QLineEdit()
-        self.edit_cache_dir.setPlaceholderText("ModelScope cache_dir（可选）")
+        self.edit_cache_dir.setPlaceholderText("")
         # 去掉系统自带 frame，避免与 QSS 的 border 叠加出现“双层边框”
         for w in (self.edit_layout_model, self.edit_vlm_model, self.edit_cache_dir):
             w.setFrame(False)
@@ -445,7 +590,7 @@ class MainWindow(QMainWindow):
         self.combo_layout_precision.setCurrentText("fp16")
         self.combo_layout_precision.setFrame(False)
 
-        self.chk_use_layout = QCheckBox("启用布局检测")
+        self.chk_use_layout = QCheckBox("")
         self.chk_use_layout.setChecked(True)
 
         self.slider_layout_thresh = QSlider(Qt.Horizontal)
@@ -460,18 +605,33 @@ class MainWindow(QMainWindow):
         self.spin_max_tokens.setValue(1024)
         self.spin_max_tokens.setFrame(False)
 
-        self.chk_llm_int4 = QCheckBox("LLM INT4 压缩")
+        self.chk_llm_int4 = QCheckBox("")
         self.chk_llm_int4.setChecked(False)
-        self.chk_vision_int8 = QCheckBox("Vision INT8 量化")
+        self.chk_vision_int8 = QCheckBox("")
         self.chk_vision_int8.setChecked(True)
-        self.chk_llm_int8_compress = QCheckBox("LLM INT8 压缩")
+        self.chk_llm_int8_compress = QCheckBox("")
         self.chk_llm_int8_compress.setChecked(True)
-        self.chk_llm_int8_quant = QCheckBox("LLM INT8 量化")
+        self.chk_llm_int8_quant = QCheckBox("")
         self.chk_llm_int8_quant.setChecked(True)
 
         self.edit_output_dir = QLineEdit(str((Path.cwd() / "output").resolve()))
         self.edit_output_dir.setFrame(False)
-        self.btn_pick_output = QPushButton("选择...")
+        self.btn_pick_output = QPushButton("")
+
+        # UI language (persisted via QSettings)
+        self.lbl_ui_language = QLabel("")
+        self.combo_ui_language = QComboBox()
+        # Keep order stable: zh_CN / en_US / zh_TW
+        self._ui_language_codes: List[Lang] = ["zh_CN", "en_US", "zh_TW"]
+        self.combo_ui_language.addItems([LANG_DISPLAY[c] for c in self._ui_language_codes])
+        # Initialize selection
+        try:
+            idx = self._ui_language_codes.index(self._lang)
+        except Exception:
+            idx = 0
+        self.combo_ui_language.setCurrentIndex(idx)
+        self.combo_ui_language.currentIndexChanged.connect(lambda _: self._set_language(self._ui_language_codes[self.combo_ui_language.currentIndex()]))
+        form.addRow(self.lbl_ui_language, self.combo_ui_language)
 
         form.addRow("layout_model_path", self.edit_layout_model)
         form.addRow("vlm_model_path", self.edit_vlm_model)
@@ -499,17 +659,18 @@ class MainWindow(QMainWindow):
         out_row.addWidget(self.btn_pick_output)
         out_wrap = QWidget()
         out_wrap.setLayout(out_row)
-        form.addRow("输出目录", out_wrap)
+        self.lbl_output_dir_row = QLabel("")
+        form.addRow(self.lbl_output_dir_row, out_wrap)
 
-        title = QLabel("设置")
-        title.setStyleSheet("font-size:18px;font-weight:600;color:#111;")
-        settings_layout.addWidget(title)
+        self.lbl_settings_title = QLabel("")
+        self.lbl_settings_title.setStyleSheet("font-size:18px;font-weight:600;color:#111;")
+        settings_layout.addWidget(self.lbl_settings_title)
         settings_layout.addLayout(form)
 
-        note = QLabel("提示：若 layout_model_path 指向具体 .xml 文件，则 layout_precision 会被忽略。")
-        note.setWordWrap(True)
-        note.setStyleSheet("color:#666;")
-        settings_layout.addWidget(note)
+        self.lbl_settings_note = QLabel("")
+        self.lbl_settings_note.setWordWrap(True)
+        self.lbl_settings_note.setStyleSheet("color:#666;")
+        settings_layout.addWidget(self.lbl_settings_note)
         settings_layout.addStretch(1)
 
         # -------- Page 2: 历史任务 --------
@@ -519,12 +680,12 @@ class MainWindow(QMainWindow):
         history_layout.setContentsMargins(12, 12, 12, 12)
         history_layout.setSpacing(10)
 
-        history_title = QLabel("历史任务（仅成功）")
-        history_title.setStyleSheet("font-size:18px;font-weight:600;color:#111;")
-        history_layout.addWidget(history_title)
+        self.lbl_history_title = QLabel("")
+        self.lbl_history_title.setStyleSheet("font-size:18px;font-weight:600;color:#111;")
+        history_layout.addWidget(self.lbl_history_title)
 
         self.history_table = QTableWidget(0, 6)
-        self.history_table.setHorizontalHeaderLabels(["时间", "文件", "类型", "任务类型", "输出目录", "摘要"])
+        self.history_table.setHorizontalHeaderLabels(["", "", "", "", "", ""])
         self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.history_table.setAlternatingRowColors(True)
@@ -540,12 +701,12 @@ class MainWindow(QMainWindow):
         history_btn_row = QHBoxLayout()
         history_btn_row.setContentsMargins(0, 0, 0, 0)
         history_btn_row.setSpacing(8)
-        self.btn_hist_open_out = QPushButton("打开输出目录")
+        self.btn_hist_open_out = QPushButton("")
         self.btn_hist_open_out.setObjectName("SecondaryButton")
-        self.btn_hist_delete = QPushButton("删除所选")
+        self.btn_hist_delete = QPushButton("")
         # 与“清空历史”保持一致的外观（次级按钮）
         self.btn_hist_delete.setObjectName("SecondaryButton")
-        self.btn_hist_clear = QPushButton("清空历史")
+        self.btn_hist_clear = QPushButton("")
         self.btn_hist_clear.setObjectName("SecondaryButton")
         history_btn_row.addWidget(self.btn_hist_open_out)
         history_btn_row.addWidget(self.btn_hist_delete)
@@ -554,19 +715,20 @@ class MainWindow(QMainWindow):
         history_layout.addLayout(history_btn_row)
 
         # 任务详情（上） + 预览（下）
-        self.hist_detail = QLabel("请选择一条历史任务查看详情…")
+        self.hist_detail = QLabel("")
         self.hist_detail.setWordWrap(True)
         self.hist_detail.setStyleSheet("color:#344054; background:#FFFFFF; border:1px solid #E2E6EA; border-radius:12px; padding:10px;")
         history_layout.addWidget(self.hist_detail, stretch=0)
 
         # 对比预览：原图 vs Markdown 可视化（左右）
-        self.hist_input_image = QLabel("原图预览")
+        self.hist_input_image = QLabel("")
         self.hist_input_image.setAlignment(Qt.AlignCenter)
         self.hist_input_image.setMinimumHeight(220)
         # 与 Markdown 预览一致：白底卡片风格（避免黑底显得像“图片画布”）
         self.hist_input_image.setStyleSheet("background:#FFFFFF;color:#667085;border:1px solid #E2E6EA;border-radius:10px;")
 
         self.hist_markdown_preview = MarkdownPreviewWidget()
+        self.hist_markdown_preview.set_lang(self._lang)
 
         compare_wrap = QWidget()
         compare_layout = QHBoxLayout(compare_wrap)
@@ -575,14 +737,14 @@ class MainWindow(QMainWindow):
         compare_layout.addWidget(self.hist_input_image, stretch=1)
         compare_layout.addWidget(self.hist_markdown_preview, stretch=1)
 
-        self.hist_output_image = QLabel("输出图预览")
+        self.hist_output_image = QLabel("")
         self.hist_output_image.setAlignment(Qt.AlignCenter)
         self.hist_output_image.setMinimumHeight(220)
         self.hist_output_image.setStyleSheet("background:#0B0B0B;color:#DDD;border-radius:10px;")
 
         self.hist_preview_tabs = QTabWidget()
-        self.hist_preview_tabs.addTab(compare_wrap, "对比（原图 vs Markdown）")
-        self.hist_preview_tabs.addTab(self.hist_output_image, "输出图")
+        self.hist_preview_tabs.addTab(compare_wrap, "")
+        self.hist_preview_tabs.addTab(self.hist_output_image, "")
         history_layout.addWidget(self.hist_preview_tabs, stretch=1)
 
         # pages 顺序与左侧导航一致：0=OCR, 1=History, 2=Settings, 3=About
@@ -595,17 +757,13 @@ class MainWindow(QMainWindow):
         about_layout = QVBoxLayout(about)
         about_layout.setContentsMargins(20, 20, 20, 20)
         about_layout.setSpacing(10)
-        about_title = QLabel("关于")
-        about_title.setStyleSheet("font-size:18px;font-weight:600;color:#111;")
-        about_layout.addWidget(about_title)
-        about_text = QLabel(
-            "PaddleOCR-VL OpenVINO Desktop Client\n\n"
-            "- 支持拖拽导入 / 批量任务 / 结果预览\n"
-            "- 导出 result.md / result.json / vis.png\n"
-        )
-        about_text.setStyleSheet("color:#333;")
-        about_text.setWordWrap(True)
-        about_layout.addWidget(about_text)
+        self.lbl_about_title = QLabel("")
+        self.lbl_about_title.setStyleSheet("font-size:18px;font-weight:600;color:#111;")
+        about_layout.addWidget(self.lbl_about_title)
+        self.lbl_about_text = QLabel("")
+        self.lbl_about_text.setStyleSheet("color:#333;")
+        self.lbl_about_text.setWordWrap(True)
+        about_layout.addWidget(self.lbl_about_text)
         about_layout.addStretch(1)
         self.pages.addWidget(about)
 
@@ -761,7 +919,7 @@ class MainWindow(QMainWindow):
 
     def _choose_files(self) -> None:
         exts = " ".join([f"*{x}" for x in SUPPORTED_IMAGE_EXTS + SUPPORTED_DOC_EXTS])
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择文件", str(Path.cwd()), f"Files ({exts})")
+        paths, _ = QFileDialog.getOpenFileNames(self, self._t("dlg.choose_files"), str(Path.cwd()), f"Files ({exts})")
         if not paths:
             return
         self._add_paths([Path(p) for p in paths])
@@ -769,7 +927,7 @@ class MainWindow(QMainWindow):
     def _choose_output_dir(self) -> None:
         # 输出目录属于“设置”
         self.nav.setCurrentRow(2)
-        d = QFileDialog.getExistingDirectory(self, "选择输出目录", self.edit_output_dir.text().strip() or str(Path.cwd()))
+        d = QFileDialog.getExistingDirectory(self, self._t("dlg.choose_output_dir"), self.edit_output_dir.text().strip() or str(Path.cwd()))
         if not d:
             return
         self.edit_output_dir.setText(d)
@@ -785,7 +943,7 @@ class MainWindow(QMainWindow):
 
     def _clear_tasks(self) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.warning(self, "提示", "正在运行中，请先停止。")
+            QMessageBox.warning(self, self._t("dlg.tip"), self._t("msg.running_stop_first"))
             return
         self._tasks.clear()
         self._archive_done_indices.clear()
@@ -800,19 +958,19 @@ class MainWindow(QMainWindow):
         - 运行中不允许删除（worker 依赖索引，删除会导致错乱）
         """
         if self._worker and self._worker.isRunning():
-            QMessageBox.warning(self, "提示", "正在运行中，无法删除任务。请先停止。")
+            QMessageBox.warning(self, self._t("dlg.tip"), self._t("msg.running_no_delete"))
             return
 
         rows = self.table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "提示", "请先在任务队列表格中选择要删除的任务行。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.select_rows_delete"))
             return
         indices = sorted({r.row() for r in rows if 0 <= r.row() < len(self._tasks)})
         if not indices:
             return
 
-        msg = f"确定要删除选中的 {len(indices)} 个任务吗？"
-        ok = QMessageBox.question(self, "确认删除", msg) == QMessageBox.Yes
+        msg = self._t("msg.confirm_delete_n", n=len(indices))
+        ok = QMessageBox.question(self, self._t("dlg.confirm_delete"), msg) == QMessageBox.Yes
         if not ok:
             return
 
@@ -840,7 +998,7 @@ class MainWindow(QMainWindow):
         启动截图：全屏框选 → 保存 PNG → 加入任务队列。
         """
         if self._worker and self._worker.isRunning():
-            QMessageBox.warning(self, "提示", "正在运行中，无法截图。")
+            QMessageBox.warning(self, self._t("dlg.tip"), self._t("msg.running_no_screenshot"))
             return
 
         # 切换到 OCR 页面更符合直觉
@@ -871,16 +1029,16 @@ class MainWindow(QMainWindow):
 
     def _on_screenshot_captured(self, result: ScreenshotResult) -> None:
         self._restore_after_screenshot()
-        self._append_log(f"截图完成：{result.saved_path}")
+        self._append_log(self._t("ui.log.screenshot_done", path=str(result.saved_path)))
         self._add_paths([result.saved_path])
 
     def _on_screenshot_canceled(self) -> None:
         self._restore_after_screenshot()
-        self._append_log("截图已取消（ESC 或选区过小）")
+        self._append_log(self._t("ui.log.screenshot_canceled"))
 
     def _add_paths(self, paths: List[Path]) -> None:
         if self._worker and self._worker.isRunning():
-            QMessageBox.warning(self, "提示", "正在运行中，暂不支持添加文件。")
+            QMessageBox.warning(self, self._t("dlg.tip"), self._t("msg.running_no_add"))
             return
 
         for p in paths:
@@ -967,23 +1125,23 @@ class MainWindow(QMainWindow):
 
     def _run(self) -> None:
         if not self._tasks:
-            QMessageBox.information(self, "提示", "请先添加文件。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.no_files"))
             return
         if self._worker and self._worker.isRunning():
-            QMessageBox.warning(self, "提示", "正在运行中。")
+            QMessageBox.warning(self, self._t("dlg.tip"), self._t("msg.running"))
             return
 
         # 只执行 pending 的任务；已完成（done/error）的任务保持原状态，不会被新一轮运行重置
         pending_indices = [i for i, t in enumerate(self._tasks) if t.status not in ("done", "error")]
         if not pending_indices:
-            QMessageBox.information(self, "提示", "没有待执行（pending）的任务。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.no_pending"))
             return
 
         out_dir = Path(self.edit_output_dir.text().strip() or "output").resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        self._append_log(f"输出目录：{out_dir}")
-        self._append_log("开始推理 ...")
+        self._append_log(self._t("ui.log.output_dir", dir=str(out_dir)))
+        self._append_log(self._t("ui.log.start_infer"))
 
         # 复位 running（若上次被中断，可能残留 running）
         self._running_task_idx = None
@@ -1008,6 +1166,7 @@ class MainWindow(QMainWindow):
             init_cfg=self._current_init_cfg(),
             pred_cfg=pred_cfg,
             run_indices=None,
+            lang=self._lang,
         )
         self._worker.signals.log.connect(self._append_log)
         self._worker.signals.progress.connect(self._on_progress)
@@ -1020,7 +1179,7 @@ class MainWindow(QMainWindow):
 
     def _stop(self) -> None:
         if self._worker and self._worker.isRunning():
-            self._append_log("请求停止 ...")
+            self._append_log(self._t("ui.log.stop_req"))
             self._worker.request_stop()
         self.btn_stop.setEnabled(False)
         # UI 层面先清掉 running（后续 worker 结束会更新 last_executed_idx）
@@ -1032,22 +1191,22 @@ class MainWindow(QMainWindow):
         重新运行选中的 task（只跑所选，不影响其它已完成任务）。
         """
         if self._worker and self._worker.isRunning():
-            QMessageBox.warning(self, "提示", "正在运行中，请先停止。")
+            QMessageBox.warning(self, self._t("dlg.tip"), self._t("msg.running_stop_first"))
             return
 
         rows = self.table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "提示", "请先在表格中选择要重跑的任务行。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.select_rows_rerun"))
             return
         indices = sorted({r.row() for r in rows if 0 <= r.row() < len(self._tasks)})
         if not indices:
-            QMessageBox.information(self, "提示", "未选中有效任务。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.no_valid_selected"))
             return
 
         out_dir = Path(self.edit_output_dir.text().strip() or "output").resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
-        self._append_log(f"输出目录：{out_dir}")
-        self._append_log(f"重跑所选任务：{len(indices)} 个")
+        self._append_log(self._t("ui.log.output_dir", dir=str(out_dir)))
+        self._append_log(self._t("ui.log.rerun_n", n=len(indices)))
 
         # 把所选任务恢复到 pending，并清理旧缓存字段（状态/错误/预览内容）
         for idx in indices:
@@ -1078,6 +1237,7 @@ class MainWindow(QMainWindow):
             init_cfg=self._current_init_cfg(),
             pred_cfg=pred_cfg,
             run_indices=indices,
+            lang=self._lang,
         )
         self._worker.signals.log.connect(self._append_log)
         self._worker.signals.progress.connect(self._on_progress)
@@ -1130,7 +1290,8 @@ class MainWindow(QMainWindow):
             item = QTableWidgetItem()
             self.table.setItem(idx, self.COL_STATUS, item)
         status = self._tasks[idx].status
-        item.setText(status)
+        # UI 显示本地化，但内部状态仍保持 pending/running/done/error
+        item.setText(self._t(f"status.{status}"))
         item.setTextAlignment(Qt.AlignCenter)
 
         # 状态 badge（专业软件常见视觉）
@@ -1159,7 +1320,7 @@ class MainWindow(QMainWindow):
     def _on_worker_finished(self) -> None:
         self.btn_run.setEnabled(True)
         self.btn_stop.setEnabled(False)
-        self._append_log("全部任务结束。")
+        self._append_log(self._t("ui.log.all_done"))
         self._running_task_idx = None
         self._recompute_task_statuses()
         self._archive_done_tasks()
@@ -1279,12 +1440,12 @@ class MainWindow(QMainWindow):
     def _on_history_selection_changed(self) -> None:
         rows = self.history_table.selectionModel().selectedRows()
         if not rows:
-            self.hist_detail.setText("请选择一条历史任务查看详情…")
+            self.hist_detail.setText(self._t("history.detail.placeholder"))
             self.hist_markdown_preview.clear()
             self.hist_input_image.clear()
-            self.hist_input_image.setText("原图预览")
+            self.hist_input_image.setText(self._t("history.input_preview"))
             self.hist_output_image.clear()
-            self.hist_output_image.setText("输出图预览")
+            self.hist_output_image.setText(self._t("history.output_preview"))
             return
         idx = rows[0].row()
         if idx < 0 or idx >= len(self._history):
@@ -1292,23 +1453,23 @@ class MainWindow(QMainWindow):
         rec = self._history[idx]
         out_dir = Path(rec.output_dir)
         if not out_dir.exists():
-            self.hist_detail.setText("输出目录不存在")
+            self.hist_detail.setText(self._t("msg.output_dir_missing"))
             self.hist_markdown_preview.clear()
-            self.hist_input_image.setText("原图预览")
-            self.hist_output_image.setText("输出图预览")
+            self.hist_input_image.setText(self._t("history.input_preview"))
+            self.hist_output_image.setText(self._t("history.output_preview"))
             return
 
         # 任务详情（上方文本）
         lines = [
-            f"时间：{rec.finished_at}",
-            f"文件：{rec.input_path}",
-            f"类型：{rec.file_type}",
+            f"{self._t('history.detail.time')}：{rec.finished_at}",
+            f"{self._t('history.detail.file')}：{rec.input_path}",
+            f"{self._t('history.detail.type')}：{rec.file_type}",
         ]
         if rec.task_type:
-            lines.append(f"任务类型：{rec.task_type}")
+            lines.append(f"{self._t('history.detail.task_type')}：{rec.task_type}")
         lines += [
-            f"输出目录：{rec.output_dir}",
-            f"摘要：{rec.summary}",
+            f"{self._t('history.detail.output_dir')}：{rec.output_dir}",
+            f"{self._t('history.detail.summary')}：{rec.summary}",
         ]
         self.hist_detail.setText("\n".join(lines))
 
@@ -1320,7 +1481,7 @@ class MainWindow(QMainWindow):
             if cand.exists():
                 input_preview = cand
         self.hist_input_image.clear()
-        self.hist_input_image.setText("原图预览")
+        self.hist_input_image.setText(self._t("history.input_preview"))
         if input_preview.exists():
             pix = QPixmap(str(input_preview))
             if not pix.isNull():
@@ -1344,7 +1505,7 @@ class MainWindow(QMainWindow):
         # 输出图：优先 vis.png
         vis_path = out_dir / "vis.png"
         self.hist_output_image.clear()
-        self.hist_output_image.setText("输出图预览")
+        self.hist_output_image.setText(self._t("history.output_preview"))
         if vis_path.exists():
             pix = QPixmap(str(vis_path))
             if not pix.isNull():
@@ -1355,7 +1516,7 @@ class MainWindow(QMainWindow):
     def _open_selected_history_output_dir(self) -> None:
         rows = self.history_table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "提示", "请先选择一条历史任务。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.select_history_first"))
             return
         idx = rows[0].row()
         if idx < 0 or idx >= len(self._history):
@@ -1376,7 +1537,7 @@ class MainWindow(QMainWindow):
         """
         rows = self.history_table.selectionModel().selectedRows()
         if not rows:
-            QMessageBox.information(self, "提示", "请先选择要删除的历史任务。")
+            QMessageBox.information(self, self._t("dlg.tip"), self._t("msg.select_history_delete_first"))
             return
         indices = sorted({r.row() for r in rows if 0 <= r.row() < len(self._history)})
         if not indices:
@@ -1384,11 +1545,11 @@ class MainWindow(QMainWindow):
 
         if len(indices) == 1:
             rec = self._history[indices[0]]
-            msg = f"确定要删除该历史任务吗？\n\n{rec.input_path}\n\n同时会删除输出目录：\n{rec.output_dir}"
+            msg = self._t("history.confirm_delete_one", input_path=rec.input_path, output_dir=rec.output_dir)
         else:
-            msg = f"确定要删除选中的 {len(indices)} 条历史任务吗？\n\n注意：会同时删除每条任务的输出目录。"
+            msg = self._t("history.confirm_delete_many", n=len(indices))
 
-        ok = QMessageBox.question(self, "确认删除", msg) == QMessageBox.Yes
+        ok = QMessageBox.question(self, self._t("dlg.confirm_delete"), msg) == QMessageBox.Yes
         if not ok:
             return
 
@@ -1412,17 +1573,17 @@ class MainWindow(QMainWindow):
         self._refresh_history_table()
 
         # 清空详情/预览，避免还显示已删除项
-        self.hist_detail.setText("请选择一条历史任务查看详情…")
+        self.hist_detail.setText(self._t("history.detail.placeholder"))
         self.hist_markdown_preview.clear()
         self.hist_input_image.clear()
-        self.hist_input_image.setText("原图预览")
+        self.hist_input_image.setText(self._t("history.input_preview"))
         self.hist_output_image.clear()
-        self.hist_output_image.setText("输出图预览")
+        self.hist_output_image.setText(self._t("history.output_preview"))
 
     def _clear_history(self) -> None:
         if not self._history:
             return
-        ok = QMessageBox.question(self, "确认", "确定要清空历史记录吗？") == QMessageBox.Yes
+        ok = QMessageBox.question(self, self._t("dlg.confirm"), self._t("msg.confirm_clear_history")) == QMessageBox.Yes
         if not ok:
             return
         self._history.clear()
