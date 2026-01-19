@@ -1,6 +1,6 @@
-# PaddleOCR‑VL OpenVINO Desktop Client (GUI User Guide)
+# PaddleOCR‑VL OpenVINO APP (GUI User Guide)
 
-This directory contains a **PySide6** desktop GUI for running `paddleocr_vl_openvino` inference in batch, and for managing outputs and successful task history.
+This directory contains a **PySide6** desktop GUI for running `paddleocr_vl_openvino` inference, and for managing outputs and successful task history.
 
 ![PaddleOCR-VL APP](./images/gui.png)
 
