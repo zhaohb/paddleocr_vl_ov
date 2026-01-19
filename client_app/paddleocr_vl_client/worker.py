@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gc
 import threading
 import traceback
 from dataclasses import asdict
@@ -87,30 +88,89 @@ class InferenceWorker(QThread):
         fp = _pipeline_fingerprint(cfg)
 
         global _PIPELINE_INSTANCE, _PIPELINE_FINGERPRINT
+        old_pipe = None
+
+        # 激进降峰值策略（无开关）：
+        # 1) 锁内：若指纹一致则复用；否则先断开全局引用（将 _PIPELINE_INSTANCE 置空）并拿到旧实例引用
+        # 2) 锁外：close + del + gc，尽可能释放 C++/显存资源，降低新旧模型短时重叠导致的峰值
+        # 3) 锁外：初始化新 Pipeline（可能耗时：下载/compile/加载权重）
+        # 4) 锁内：发布新实例
         with _PIPELINE_LOCK:
             if _PIPELINE_INSTANCE is not None and _PIPELINE_FINGERPRINT == fp:
                 self._pipeline = _PIPELINE_INSTANCE
                 self._log("✅ 复用已加载的 Pipeline（模型不再重复初始化）")
                 return
 
-            # 配置发生变化或首次加载：重新初始化并替换缓存
-            self._log("初始化 Pipeline ...（首次/配置变化时可能会下载模型）")
-            pipe = PaddleOCRVL(
-                layout_model_path=cfg.layout_model_path or None,
-                vlm_model_path=cfg.vlm_model_path or None,
-                cache_dir=cfg.cache_dir or None,
-                vlm_device=cfg.vlm_device,
-                layout_device=cfg.layout_device,
-                layout_precision=cfg.layout_precision,
-                llm_int4_compress=cfg.llm_int4_compress,
-                vision_int8_quant=cfg.vision_int8_quant,
-                llm_int8_compress=cfg.llm_int8_compress,
-                llm_int8_quant=cfg.llm_int8_quant,
-            )
-            _PIPELINE_INSTANCE = pipe
+            old_pipe = _PIPELINE_INSTANCE
+            _PIPELINE_INSTANCE = None
+            _PIPELINE_FINGERPRINT = None
+
+        # 锁外释放旧实例（真正做到“先清理旧，再创建新”）
+        if old_pipe is not None:
+            self._log("♻️  配置发生变化：预先释放旧 Pipeline...")
+            try:
+                if hasattr(old_pipe, "close") and callable(getattr(old_pipe, "close")):
+                    old_pipe.close()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                del old_pipe
+            except Exception:
+                pass
+            try:
+                gc.collect()
+            except Exception:
+                pass
+
+        # 锁外初始化新 Pipeline（可能耗时）
+        self._log("初始化 Pipeline ...（首次/配置变化时可能会下载模型）")
+        new_pipe = PaddleOCRVL(
+            layout_model_path=cfg.layout_model_path or None,
+            vlm_model_path=cfg.vlm_model_path or None,
+            cache_dir=cfg.cache_dir or None,
+            vlm_device=cfg.vlm_device,
+            layout_device=cfg.layout_device,
+            layout_precision=cfg.layout_precision,
+            llm_int4_compress=cfg.llm_int4_compress,
+            vision_int8_quant=cfg.vision_int8_quant,
+            llm_int8_compress=cfg.llm_int8_compress,
+            llm_int8_quant=cfg.llm_int8_quant,
+        )
+
+        prev = None
+        with _PIPELINE_LOCK:
+            # 最小防御：若并发创建了同配置实例，则释放本次新建并复用已有
+            if _PIPELINE_INSTANCE is not None and _PIPELINE_FINGERPRINT == fp:
+                try:
+                    if hasattr(new_pipe, "close") and callable(getattr(new_pipe, "close")):
+                        new_pipe.close()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+                self._pipeline = _PIPELINE_INSTANCE
+                self._log("✅ Pipeline 已在其他位置初始化，本次直接复用")
+                return
+
+            prev = _PIPELINE_INSTANCE
+            _PIPELINE_INSTANCE = new_pipe
             _PIPELINE_FINGERPRINT = fp
-            self._pipeline = pipe
+            self._pipeline = new_pipe
             self._log("✅ Pipeline 初始化完成")
+
+        # 若出现极小概率并发不同配置实例，这里补一次释放
+        if prev is not None:
+            try:
+                if hasattr(prev, "close") and callable(getattr(prev, "close")):
+                    prev.close()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            try:
+                del prev
+            except Exception:
+                pass
+            try:
+                gc.collect()
+            except Exception:
+                pass
 
     def _pick_vis_image(self, result) -> Optional[object]:
         img_dict = getattr(result, "img", None)

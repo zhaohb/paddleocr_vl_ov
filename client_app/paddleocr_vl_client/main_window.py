@@ -367,6 +367,16 @@ class MainWindow(QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setObjectName("TaskTable")
+        # 表格内放了 QComboBox（任务类型）。默认列宽/行高较小时，叠加 QSS padding 会导致文本被裁剪，
+        # 看起来像“选了但不显示”。这里给出一个更稳妥的默认尺寸。
+        try:
+            self.table.verticalHeader().setDefaultSectionSize(36)
+        except Exception:
+            pass
+        # 让“任务类型/状态”列至少能展示文本
+        self.table.setColumnWidth(self.COL_EXT, 90)
+        self.table.setColumnWidth(self.COL_TASK_TYPE, 140)
+        self.table.setColumnWidth(self.COL_STATUS, 110)
         task_layout.addWidget(self.table, stretch=1)
 
         footer_row = QHBoxLayout()
@@ -641,6 +651,9 @@ class MainWindow(QMainWindow):
         combo.addItems(list(self.TASK_TYPE_OPTIONS))
         combo.setCurrentText(value)
         combo.setFrame(False)
+        # 表格 cell 内使用更紧凑的样式，避免 padding 过大导致文本区域被挤没
+        combo.setMinimumWidth(120)
+        combo.setStyleSheet("QComboBox { padding: 2px 8px; }")
         # 开启布局检测时禁用（此时手动 task_type 不生效）
         combo.setEnabled(not self.chk_use_layout.isChecked())
 

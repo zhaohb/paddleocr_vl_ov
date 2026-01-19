@@ -2163,8 +2163,50 @@ class PaddleOCRVL:
         return self._to_np_array(merged)
     
     def close(self):
-        """关闭模型，释放资源"""
-        if hasattr(self, 'vlm_model'):
-            # VLM 模型可能需要清理
+        """
+        关闭模型，尽可能释放 OpenVINO / VLM 相关资源。
+        """
+        # VLM
+        try:
+            vlm = getattr(self, "vlm_model", None)
+            if vlm is not None:
+                for m in ("close", "release"):
+                    fn = getattr(vlm, m, None)
+                    if callable(fn):
+                        try:
+                            fn()
+                        except Exception:
+                            pass
+                        break
+        except Exception:
+            pass
+        try:
+            self.vlm_model = None
+        except Exception:
+            pass
+
+        # Layout (optional)
+        for name in ("layout_request", "layout_compiled_model"):
+            try:
+                obj = getattr(self, name, None)
+                if obj is not None:
+                    for m in ("close", "release"):
+                        fn = getattr(obj, m, None)
+                        if callable(fn):
+                            try:
+                                fn()
+                            except Exception:
+                                pass
+                            break
+            except Exception:
+                pass
+            try:
+                setattr(self, name, None)
+            except Exception:
+                pass
+
+        try:
+            self.core = None
+        except Exception:
             pass
 
