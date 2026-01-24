@@ -115,7 +115,7 @@ def main():
         llm_int8_compress=args.llm_int8_compress,
         vision_int8_quant=args.vision_int8_quant,
     )
-    paddleocr_vl_ov.export_vision_to_ov()
+    paddleocr_vl_ov.export_paddleocr_vl_to_ov()
 
 
 if __name__ == "__main__":
