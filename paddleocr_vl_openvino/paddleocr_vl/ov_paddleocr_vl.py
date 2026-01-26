@@ -115,7 +115,53 @@ class PaddleOCRVLPreprocessor:
         """
         # Use default chat template if not provided
         if chat_template is None:
-            chat_template = '{%- if not add_generation_prompt is defined -%}\n    {%- set add_generation_prompt = true -%}\n{%- endif -%}\n{%- if not cls_token is defined -%}\n    {%- set cls_token = "<|begin_of_sentence|>" -%}\n{%- endif -%}\n{%- if not eos_token is defined -%}\n    {%- set eos_token = "</s>" -%}\n{%- endif -%}\n{%- if not image_token is defined -%}\n    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}\n{%- endif -%}\n{{- cls_token -}}\n{%- for message in messages -%}\n    {%- if message["role"] == "user" -%}\n        {{- "User: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "image" -%}\n                {{ image_token }}\n            {%- endif -%}\n        {%- endfor -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ "\\n" -}}\n    {%- elif message["role"] == "assistant" -%}\n        {{- "Assistant: " -}}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] }}\n            {%- endif -%}\n        {%- endfor -%}\n        {{ eos_token -}}\n    {%- elif message["role"] == "system" -%}\n        {%- for content in message["content"] -%}\n            {%- if content["type"] == "text" -%}\n                {{ content["text"] + "\\n" }}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- endif -%}\n{%- endfor -%}\n{%- if add_generation_prompt -%}\n    {{- "Assistant: " -}}\n{%- endif -%}\n'
+            chat_template = """{%- if not add_generation_prompt is defined -%}
+    {%- set add_generation_prompt = true -%}
+{%- endif -%}
+{%- if not cls_token is defined -%}
+    {%- set cls_token = "<|begin_of_sentence|>" -%}
+{%- endif -%}
+{%- if not eos_token is defined -%}
+    {%- set eos_token = "</s>" -%}
+{%- endif -%}
+{%- if not image_token is defined -%}
+    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}
+{%- endif -%}
+{{- cls_token -}}
+{%- for message in messages -%}
+    {%- if message["role"] == "user" -%}
+        {{- "User: " -}}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "image" -%}
+                {{ image_token }}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "text" -%}
+                {{ content["text"] }}
+            {%- endif -%}
+        {%- endfor -%}
+        {{ "\n" -}}
+    {%- elif message["role"] == "assistant" -%}
+        {{- "Assistant: " -}}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "text" -%}
+                {{ content["text"] }}
+            {%- endif -%}
+        {%- endfor -%}
+        {{ eos_token -}}
+    {%- elif message["role"] == "system" -%}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "text" -%}
+                {{ content["text"] + "\n" }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- "Assistant: " -}}
+{%- endif -%}
+"""
         
         # Render Jinja template to get text with placeholders
         text, generation_indices = render_jinja_template(
@@ -131,8 +177,8 @@ class PaddleOCRVLPreprocessor:
             "rescale_factor": 0.00392156862745098,
             "image_mean": [0.5, 0.5, 0.5],
             "image_std": [0.5, 0.5, 0.5],
-            "min_pixels": 147384,
-            "max_pixels": 2822400,
+            "min_pixels": 112896,
+            "max_pixels": 1003520,
             "patch_size": 14,
             "temporal_patch_size": 1,
             "merge_size": 2

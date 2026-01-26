@@ -4,10 +4,39 @@ import numpy as np
 import json
 import os
 import argparse
+from typing import Dict, List, Optional
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 import mimetypes
 import logging
+
+# -----------------------------------------------------------------------------
+# 直接导入子模块并直接调用
+# - 作为包导入时：相对导入
+# - 直接运行该脚本时：回退到绝对导入（修复 "attempted relative import with no known parent package"）
+# -----------------------------------------------------------------------------
+try:
+    from . import processors, result, utils  # type: ignore
+except ImportError:  # pragma: no cover
+    import importlib
+    import sys
+    from pathlib import Path as _Path
+
+    # 将 `.../pp_doclayoutv2` 的父目录加入 sys.path，使 `pp_doclayoutv2.*` 可被绝对导入
+    _this_dir = _Path(__file__).resolve().parent
+    _pkg_parent = str(_this_dir.parent)
+    if _pkg_parent not in sys.path:
+        sys.path.insert(0, _pkg_parent)
+
+    processors = importlib.import_module("pp_doclayoutv2.processors")
+    result = importlib.import_module("pp_doclayoutv2.result")
+    utils = importlib.import_module("pp_doclayoutv2.utils")
+
+# -----------------------------------------------------------------------------
+# Backward-compat exports (after `result` is imported)
+# -----------------------------------------------------------------------------
+# Keep an alias for older imports (e.g. `from pp_doclayoutv2 import LayoutDetectionResult`).
+LayoutDetectionResult = result.LayoutAnalysisResult
 
 # Try importing modelscope, show warning if not installed
 try:
@@ -64,69 +93,9 @@ def center_to_corners_format(boxes):
     xmax, ymax = cx + w / 2.0, cy + h / 2.0
     return np.stack([xmin, ymin, xmax, ymax], axis=-1)
 
-def iou(box1, box2):
-    """
-    Calculate Intersection over Union (IoU) between two bounding boxes.
-    
-    Args:
-        box1: First bounding box [x1, y1, x2, y2]
-        box2: Second bounding box [x1, y1, x2, y2]
-    
-    Returns:
-        float: IoU value between 0 and 1
-    """
-    x1, y1, x2, y2 = box1
-    x1_p, y1_p, x2_p, y2_p = box2
-    
-    x1_i = max(x1, x1_p)
-    y1_i = max(y1, y1_p)
-    x2_i = min(x2, x2_p)
-    y2_i = min(y2, y2_p)
-    
-    inter_area = max(0, x2_i - x1_i + 1) * max(0, y2_i - y1_i + 1)
-    box1_area = (x2 - x1 + 1) * (y2 - y1 + 1)
-    box2_area = (x2_p - x1_p + 1) * (y2_p - y1_p + 1)
-    
-    return inter_area / float(box1_area + box2_area - inter_area)
-
 def nms(boxes, iou_same=0.6, iou_diff=0.98):
-    """
-    Non-maximum suppression (NMS) to remove duplicate detections.
-    
-    Args:
-        boxes: Detection boxes with format [class_id, score, x1, y1, x2, y2, ...]
-        iou_same: IoU threshold for boxes of the same class
-        iou_diff: IoU threshold for boxes of different classes
-    
-    Returns:
-        list: Indices of selected boxes after NMS
-    """
-    scores = boxes[:, 1]
-    indices = np.argsort(scores)[::-1]
-    selected_boxes = []
-    
-    while len(indices) > 0:
-        current = indices[0]
-        current_box = boxes[current]
-        current_class = current_box[0]
-        current_coords = current_box[2:]
-        
-        selected_boxes.append(current)
-        indices = indices[1:]
-        
-        filtered_indices = []
-        for i in indices:
-            box = boxes[i]
-            box_class = box[0]
-            box_coords = box[2:]
-            iou_value = iou(current_coords, box_coords)
-            threshold = iou_same if current_class == box_class else iou_diff
-            
-            if iou_value < threshold:
-                filtered_indices.append(i)
-        indices = filtered_indices
-    
-    return selected_boxes
+    """兼容旧调用点：直接转调 utils.nms。"""
+    return utils.nms(boxes, iou_same=iou_same, iou_diff=iou_diff)
 
 def is_contained(box1, box2):
     """
@@ -191,297 +160,103 @@ def check_containment(boxes, formula_index=None, category_index=None, mode=None)
     
     return contains_other, contained_by_other
 
-def unclip_boxes(boxes, unclip_ratio=None):
-    """
-    Expand bounding box coordinates by specified ratios.
-    
-    Args:
-        boxes: Bounding boxes array [class_id, score, x1, y1, x2, y2, ...]
-        unclip_ratio: Expansion ratio(s). Can be:
-            - None: No expansion
-            - dict: {class_id: (width_ratio, height_ratio)}
-            - tuple/list: (width_ratio, height_ratio) for all boxes
-    
-    Returns:
-        np.ndarray: Expanded bounding boxes
-    """
-    if unclip_ratio is None:
-        return boxes
-    
-    if isinstance(unclip_ratio, dict):
-        expanded_boxes = []
-        for box in boxes:
-            class_id, score, x1, y1, x2, y2 = box
-            if class_id in unclip_ratio:
-                width_ratio, height_ratio = unclip_ratio[class_id]
-                width = x2 - x1
-                height = y2 - y1
-                new_w = width * width_ratio
-                new_h = height * height_ratio
-                center_x = x1 + width / 2
-                center_y = y1 + height / 2
-                new_x1 = center_x - new_w / 2
-                new_y1 = center_y - new_h / 2
-                new_x2 = center_x + new_w / 2
-                new_y2 = center_y + new_h / 2
-                expanded_boxes.append([class_id, score, new_x1, new_y1, new_x2, new_y2])
-            else:
-                expanded_boxes.append(box)
-        return np.array(expanded_boxes)
-    else:
-        widths = boxes[:, 4] - boxes[:, 2]
-        heights = boxes[:, 5] - boxes[:, 3]
-        new_w = widths * unclip_ratio[0]
-        new_h = heights * unclip_ratio[1]
-        center_x = boxes[:, 2] + widths / 2
-        center_y = boxes[:, 3] + heights / 2
-        new_x1 = center_x - new_w / 2
-        new_y1 = center_y - new_h / 2
-        new_x2 = center_x + new_w / 2
-        new_y2 = center_y + new_h / 2
-        return np.column_stack((boxes[:, 0], boxes[:, 1], new_x1, new_y1, new_x2, new_y2))
-
-def restructured_boxes(boxes, labels, img_size):
-    """
-    Restructure boxes into a standardized output format with clipping to image boundaries.
-    
-    Args:
-        boxes: Bounding boxes array [class_id, score, x1, y1, x2, y2]
-        labels: List of label names corresponding to class IDs
-        img_size: Image size (width, height)
-    
-    Returns:
-        list: List of dictionaries with keys: cls_id, label, score, coordinate
-    """
-    box_list = []
-    w, h = img_size
-    
-    for box in boxes:
-        xmin, ymin, xmax, ymax = box[2:]
-        xmin = max(0, xmin)
-        ymin = max(0, ymin)
-        xmax = min(w, xmax)
-        ymax = min(h, ymax)
-        if xmax <= xmin or ymax <= ymin:
-            continue
-        box_list.append({
-            "cls_id": int(box[0]),
-            "label": labels[int(box[0])],
-            "score": float(box[1]),
-            "coordinate": [xmin, ymin, xmax, ymax],
-        })
-    
-    return box_list
 
 def draw_box(img, boxes):
-    """
-    Draw bounding boxes and labels on the image.
-    
-    Args:
-        img: PIL Image object
-        boxes: List of detection boxes, each containing 'label', 'coordinate', and 'score'
-    
-    Returns:
-        PIL.Image: Image with drawn bounding boxes and labels
-    """
-    try:
-        font_size = int(0.018 * img.width) + 2
-        font_paths = [
-            "C:/Windows/Fonts/msyh.ttc",  # Microsoft YaHei
-            "C:/Windows/Fonts/simhei.ttf",  # SimHei (Bold)
-            "C:/Windows/Fonts/simsun.ttc",  # SimSun (Song)
-        ]
-        font = None
-        for fp in font_paths:
-            if os.path.exists(fp):
-                try:
-                    font = ImageFont.truetype(fp, font_size, encoding="utf-8")
-                    break
-                except:
-                    continue
-        if font is None:
-            font = ImageFont.load_default()
-    except:
-        font = ImageFont.load_default()
-    
-    draw_thickness = int(max(img.size) * 0.002)
-    draw = ImageDraw.Draw(img)
-    color_list = [
-        (128, 64, 128), (232, 35, 244), (70, 70, 70), (156, 102, 102), (153, 153, 190),
-        (153, 153, 153), (30, 170, 250), (0, 220, 220), (35, 142, 107), (152, 251, 152),
-        (180, 130, 70), (60, 20, 220), (0, 0, 255), (142, 0, 0), (70, 0, 0),
-        (100, 60, 0), (90, 0, 0), (230, 0, 0), (32, 11, 119), (0, 74, 111), (81, 0, 81)
-    ]
-    font_colors = [
-        (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
-        (255, 255, 255), (255, 255, 255), (0, 0, 0), (255, 255, 255), (0, 0, 0),
-        (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255),
-        (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255), (255, 255, 255)
-    ]
-    
-    label2color = {}
-    label2fontcolor = {}
-    
-    for i, dt in enumerate(boxes):
-        label, bbox, score = dt["label"], dt["coordinate"], dt["score"]
-        
-        if label not in label2color:
-            color_index = i % len(color_list)
-            label2color[label] = color_list[color_index]
-            label2fontcolor[label] = font_colors[color_index]
-        
-        color = label2color[label]
-        font_color = label2fontcolor[label]
-        
-        if len(bbox) == 4:
-            xmin, ymin, xmax, ymax = bbox
-            rectangle = [
-                (xmin, ymin),
-                (xmin, ymax),
-                (xmax, ymax),
-                (xmax, ymin),
-                (xmin, ymin),
-            ]
-        elif len(bbox) == 8:
-            x1, y1, x2, y2, x3, y3, x4, y4 = bbox
-            rectangle = [(x1, y1), (x2, y2), (x3, y3), (x4, y4), (x1, y1)]
-            xmin = min(x1, x2, x3, x4)
-            ymin = min(y1, y2, y3, y4)
-        else:
-            continue
-        
-        draw.line(rectangle, width=draw_thickness, fill=color)
-        text = "{} {:.2f}".format(label, score)
-        try:
-            left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
-            tw, th = right - left, bottom - top + 4
-        except:
-            tw, th = draw.textsize(text, font=font)
-            th += 4
-        
-        if ymin < th:
-            draw.rectangle([(xmin, ymin), (xmin + tw + 4, ymin + th + 1)], fill=color)
-            draw.text((xmin + 2, ymin - 2), text, fill=font_color, font=font)
-        else:
-            draw.rectangle([(xmin, ymin - th), (xmin + tw + 4, ymin + 1)], fill=color)
-            draw.text((xmin + 2, ymin - th - 2), text, fill=font_color, font=font)
-    
-    return img
+    """兼容旧调用点：直接转调 result.draw_box。"""
+    return result.draw_box(img, boxes)
 
-class LayoutDetectionResult:
+def _sort_boxes_reading_order_like_paddlex(boxes: List[Dict], same_line_y_thresh: int = 10) -> List[Dict]:
     """
-    Layout detection result class for storing and managing detection results.
-    
-    Attributes:
-        input_path: Path to the input image
-        boxes: List of detected bounding boxes
-        page_index: Optional page index for multi-page documents
-        input_img: Optional original input image (BGR format)
+    对齐 PaddleX/PP 系列常用的“阅读顺序”排序：
+    - 先按左上角 (ymin, xmin) 排序
+    - 若相邻框 y 差 < same_line_y_thresh 认为同一行，再按 xmin 做局部交换
+
+    说明：
+    - PaddleX 的 `update_order_index()` 只会按当前列表顺序编号，不会排序；
+      PaddleOCR 的 LayoutDetection 输出通常已经按阅读顺序排列。
+    - 这里用矩形框 `coordinate=[xmin,ymin,xmax,ymax]` 的 (xmin,ymin) 作为排序基准。
     """
-    
-    def __init__(self, input_path, boxes, page_index=None, input_img=None):
-        self.input_path = input_path
-        self.boxes = boxes
-        self.page_index = page_index
-        self.input_img = input_img
-    
-    def _get_input_fn(self):
-        if self.input_path is None:
-            import time
-            import random
-            timestamp = int(time.time())
-            random_number = random.randint(1000, 9999)
-            return f"{timestamp}_{random_number}"
-        return Path(self.input_path).name
-    
-    def _to_json(self):
-        def _format_data_for_json(obj):
-            if isinstance(obj, np.float32):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return [_format_data_for_json(item) for item in obj.tolist()]
-            elif isinstance(obj, Path):
-                return obj.as_posix()
-            elif isinstance(obj, dict):
-                return {k: _format_data_for_json(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [_format_data_for_json(i) for i in obj]
+    if not boxes:
+        return boxes
+
+    sorted_boxes = sorted(boxes, key=lambda b: (b.get("coordinate", [0, 0, 0, 0])[1], b.get("coordinate", [0, 0, 0, 0])[0]))
+    _boxes = list(sorted_boxes)
+    num_boxes = len(_boxes)
+    for i in range(num_boxes - 1):
+        for j in range(i, -1, -1):
+            yj = _boxes[j].get("coordinate", [0, 0, 0, 0])[1]
+            yj1 = _boxes[j + 1].get("coordinate", [0, 0, 0, 0])[1]
+            xj = _boxes[j].get("coordinate", [0, 0, 0, 0])[0]
+            xj1 = _boxes[j + 1].get("coordinate", [0, 0, 0, 0])[0]
+            if abs(yj1 - yj) < same_line_y_thresh and xj1 < xj:
+                _boxes[j], _boxes[j + 1] = _boxes[j + 1], _boxes[j]
             else:
-                return obj
-        
-        data = {
-            "input_path": self.input_path,
-            "page_index": self.page_index,
-            "boxes": _format_data_for_json(self.boxes)
-        }
-        return {"res": data}
-    
-    def save_to_json(self, save_path, indent=4, ensure_ascii=False):
-        def _is_json_file(file_path):
-            mime_type, _ = mimetypes.guess_type(file_path)
-            return mime_type is not None and mime_type == "application/json"
-        
-        json_data = self._to_json()
-        
-        if not _is_json_file(save_path):
-            fn = Path(self._get_input_fn())
-            stem = fn.stem
-            base_save_path = Path(save_path)
-            for key in json_data:
-                save_path = base_save_path / f"{stem}_{key}.json"
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(save_path, 'w', encoding='utf-8') as f:
-                    json.dump(json_data[key], f, indent=indent, ensure_ascii=ensure_ascii)
-        else:
-            if len(json_data) > 1:
-                import logging
-                logging.warning(
-                    f"The result has multiple json files need to be saved. But the `save_path` has been specified as `{save_path}`!"
-                )
-            save_path = Path(save_path)
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(save_path, 'w', encoding='utf-8') as f:
-                json.dump(json_data[list(json_data.keys())[0]], f, indent=indent, ensure_ascii=ensure_ascii)
-    
-    def _to_img(self):
-        if self.input_img is None:
-            raise ValueError("input_img is required for _to_img")
-        img_rgb = cv2.cvtColor(self.input_img, cv2.COLOR_BGR2RGB)
-        img_pil = Image.fromarray(img_rgb)
-        img_vis = draw_box(img_pil, self.boxes)
-        
-        return {"res": img_vis}
-    
-    def save_to_img(self, save_path):
-        def _is_image_file(file_path):
-            mime_type, _ = mimetypes.guess_type(file_path)
-            return mime_type is not None and mime_type.startswith("image/")
-        
-        img = self._to_img()
-        
-        if not _is_image_file(save_path):
-            fn = Path(self._get_input_fn())
-            stem = fn.stem
-            suffix = fn.suffix if _is_image_file(fn) else ".png"
-            base_save_path = Path(save_path)
-            for key in img:
-                save_path = base_save_path / f"{stem}_{key}{suffix}"
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                img[key].save(save_path)
-        else:
-            if len(img) > 1:
-                import logging
-                logging.warning(
-                    f"The result has multiple img files need to be saved. But the `save_path` has been specified as `{save_path}`!"
-                )
-            save_path = Path(save_path)
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            img[list(img.keys())[0]].save(save_path)
+                break
+    return _boxes
 
+def _sort_boxes_and_masks_by_reading_order(
+    boxes_np: np.ndarray,
+    masks: Optional[np.ndarray],
+    same_line_y_thresh: int = 10,
+) -> tuple[np.ndarray, Optional[np.ndarray]]:
+    """
+    在进行 mask->polygon 的提取前，先把 boxes（以及对应 masks）按阅读顺序排序。
 
+    为什么需要这个？
+    - PaddleX 的 `extract_polygon_points_by_masks(..., layout_shape_mode="auto")` 内部会使用
+      `pre_poly = polygon_points[-1]`（上一框的 polygon）参与几何判断。
+    - 因此“框的遍历顺序”会影响 auto 模式下最终选择 polygon/quad/rect。
+    - PaddleOCR / PaddleX 在不同后端上，原始输出框顺序可能不同（score/NMS实现差异等），
+      导致 auto 分支结果不一致（表现为某些框 polygon_points 点数不同）。
 
-def postprocess_detections_paddle_nms(output, orig_h, orig_w, threshold=0.5,
-                                     layout_nms=False, layout_unclip_ratio=None, layout_merge_bboxes_mode=None):
+    这里对齐 Paddle 常见阅读顺序：先按 (ymin, xmin) 排序，再对 y 差 < 阈值的相邻框做 x 校正。
+    """
+    if boxes_np is None or boxes_np.size == 0:
+        return boxes_np, masks
+    if boxes_np.ndim != 2 or boxes_np.shape[1] < 6:
+        return boxes_np, masks
+
+    # primary sort by ymin then xmin
+    ymin = boxes_np[:, 3]
+    xmin = boxes_np[:, 2]
+    order = np.lexsort((xmin, ymin))
+
+    # local swap for same-line boxes (y close) but x inverted
+    order_list = list(map(int, order.tolist()))
+    for i in range(len(order_list) - 1):
+        for j in range(i, -1, -1):
+            a = order_list[j]
+            b = order_list[j + 1]
+            if abs(float(boxes_np[b, 3]) - float(boxes_np[a, 3])) < same_line_y_thresh and float(boxes_np[b, 2]) < float(boxes_np[a, 2]):
+                order_list[j], order_list[j + 1] = order_list[j + 1], order_list[j]
+            else:
+                break
+
+    order = np.array(order_list, dtype=np.int64)
+    boxes_sorted = boxes_np[order]
+    if masks is None:
+        return boxes_sorted, None
+    masks_sorted = masks[order] if hasattr(masks, "__getitem__") and len(masks) >= len(order) else masks
+    return boxes_sorted, masks_sorted
+
+"""
+结果类型使用本目录的 `result.LayoutAnalysisResult`（自包含实现），与 PaddleX 的 Result 行为保持一致：
+- 内部字段：input_path/page_index/input_img/boxes
+- 提供 save_to_img / save_to_json
+"""
+
+def postprocess_detections_paddle_nms(
+    output,
+    orig_h,
+    orig_w,
+    threshold=0.5,
+    layout_nms=False,
+    layout_unclip_ratio=None,
+    layout_merge_bboxes_mode=None,
+    layout_shape_mode: str = "auto",
+    filter_overlap_boxes: bool = True,
+    skip_order_labels: Optional[List[str]] = None,
+):
     """
     Postprocess PaddleDetection-style exported outputs.
 
@@ -499,6 +274,7 @@ def postprocess_detections_paddle_nms(output, orig_h, orig_w, threshold=0.5,
 
     out0 = np.array(output[0])
     out1 = np.array(output[1]) if len(output) > 1 and output[1] is not None else None
+    masks = np.array(output[2]) if len(output) > 2 and output[2] is not None else None
 
     if out0.ndim != 2 or out0.shape[1] < 6:
         raise ValueError(f"Unsupported Paddle NMS output shape: {out0.shape}")
@@ -511,6 +287,8 @@ def postprocess_detections_paddle_nms(output, orig_h, orig_w, threshold=0.5,
         num = out0.shape[0]
 
     det = out0[:num]
+    if masks is not None and masks.shape[0] >= num:
+        masks = masks[:num]
     if det.size == 0:
         return []
 
@@ -577,6 +355,7 @@ def postprocess_detections_paddle_nms(output, orig_h, orig_w, threshold=0.5,
                 best = (cls_col, score_col, coord_cols, s, (cls_idx, score_idx, coord_idxs))
         return best
 
+    # breakpoint()
     if det.shape[1] >= 7:
         best = _try_pattern(det)
         if best is None:
@@ -587,7 +366,58 @@ def postprocess_detections_paddle_nms(output, orig_h, orig_w, threshold=0.5,
         # 6-column most common: [cls, score, x0,y0,x1,y1]
         cls = det[:, 0]
         score = det[:, 1]
-        coords = det[:, 2:6]
+        coords = det[:, 2:]
+
+    # --- Preserve optional order_id / order_score columns (if present) ---
+    # PaddleX `LayoutAnalysisProcess.apply()` supports:
+    # - shape[1] == 7: new ordered object detection (extra col = order_id)
+    # - shape[1] == 8: ordered object detection (extra cols = order_id, order_score)
+    # If the raw NMS table contains such columns, we keep them and pass to post.apply()
+    # so processors.py can sort by them (see processors.py:999-1015).
+    order_id = None
+    order_score = None
+    try:
+        if det.shape[1] >= 7:
+            cls_idx, score_idx, coord_idxs = used
+            used_cols = set([int(cls_idx), int(score_idx)] + [int(x) for x in coord_idxs])
+            extra_idxs = [i for i in range(int(det.shape[1])) if i not in used_cols]
+
+            def _is_int_like(arr: np.ndarray) -> bool:
+                arr = arr.astype(np.float32)
+                return float(np.mean(np.abs(arr - np.round(arr)) < 1e-3)) >= 0.95
+
+            def _is_score_like(arr: np.ndarray) -> bool:
+                arr = arr.astype(np.float32)
+                return float(np.mean((arr >= -0.01) & (arr <= 1.5))) >= 0.95
+
+            def _is_constant_zero(arr: np.ndarray) -> bool:
+                arr = arr.astype(np.float32)
+                return float(np.max(np.abs(arr))) < 1e-6
+
+            if len(extra_idxs) == 1:
+                col = det[:, extra_idxs[0]]
+                # Typical 7-col Paddle NMS table includes img_id (usually all zeros for single image).
+                # Ignore constant-zero column; otherwise if it's integer-like, treat as order_id.
+                if (not _is_constant_zero(col)) and _is_int_like(col):
+                    order_id = col
+            elif len(extra_idxs) >= 2:
+                cols = [(i, det[:, i]) for i in extra_idxs]
+                int_like = [(i, c) for i, c in cols if _is_int_like(c) and not _is_constant_zero(c)]
+                score_like = [(i, c) for i, c in cols if _is_score_like(c)]
+                if int_like:
+                    order_id = int_like[0][1]
+                if score_like:
+                    # pick a score-like column different from order_id if possible
+                    for _, c in score_like:
+                        if order_id is None:
+                            order_score = c
+                            break
+                        if not np.array_equal(c, order_id):
+                            order_score = c
+                            break
+    except Exception:
+        order_id = None
+        order_score = None
 
     # coords may be xyxy in pixels or normalized [0,1]; normalize to pixel xyxy
     coords = coords.astype(np.float32)
@@ -605,80 +435,80 @@ def postprocess_detections_paddle_nms(output, orig_h, orig_w, threshold=0.5,
     y1 = np.maximum(coords[:, 1], coords[:, 3])
     coords = np.stack([x0, y0, x1, y1], axis=1)
 
-    boxes = np.column_stack([cls, score, coords]).astype(np.float32)
+    # Build boxes for downstream postprocess:
+    # - base: [cls, score, x0,y0,x1,y1]
+    # - optional: append order_id / order_score to enable processors.py ordering (shape==7/8)
+    if order_id is not None and order_score is not None:
+        boxes = np.column_stack([cls, score, coords, order_id, order_score]).astype(np.float32)
+    elif order_id is not None:
+        boxes = np.column_stack([cls, score, coords, order_id]).astype(np.float32)
+    else:
+        boxes = np.column_stack([cls, score, coords]).astype(np.float32)
+    # breakpoint()
+
+    # Align with PaddleX: round bbox coords to int-like values early
+    # (PaddleX does np.round(...).astype(int) before further filtering/NMS)
+    if boxes.size > 0:
+        boxes[:, 2:6] = np.round(boxes[:, 2:6]).astype(np.float32)
+
+    # # 尽量对齐 Paddle 的 auto polygon 决策：在提取 polygon 前先排序 boxes/masks
+    # if masks is not None:
+    #     boxes, masks = _sort_boxes_and_masks_by_reading_order(boxes, masks)
 
     label_list = ["abstract", "algorithm", "aside_text", "chart", "content", "display_formula",
                   "doc_title", "figure_title", "footer", "footer_image", "footnote", "formula_number",
                   "header", "header_image", "image", "inline_formula", "number", "paragraph_title",
                   "reference", "reference_content", "seal", "table", "text", "vertical_text", "vision_footnote"]
 
-    # Threshold filtering
-    if isinstance(threshold, float):
-        boxes = boxes[(boxes[:, 1] > threshold) & (boxes[:, 0] > -1)]
-    elif isinstance(threshold, dict):
-        filtered = []
-        for cat_id in np.unique(boxes[:, 0]).astype(int):
-            cat_boxes = boxes[boxes[:, 0] == cat_id]
-            th = float(threshold.get(int(cat_id), 0.5))
-            filtered.append(cat_boxes[(cat_boxes[:, 1] > th) & (cat_boxes[:, 0] > -1)])
-        boxes = np.vstack(filtered) if filtered else np.array([], dtype=np.float32)
+    # 对齐 PaddleX：当模型输出不含 masks 时，强制使用 rect
+    effective_layout_shape_mode = layout_shape_mode
+    if masks is None:
+        if layout_shape_mode not in ("rect", "auto"):
+            logging.warning(
+                "The model you are using does not support polygon output, but the "
+                f"layout_shape_mode is specified as {layout_shape_mode}, which will be set to 'rect'"
+            )
+        effective_layout_shape_mode = "rect"
 
-    if boxes.size == 0:
-        return []
+    post = processors.LayoutAnalysisProcess(labels=label_list, scale_size=[800, 800])
+    # breakpoint()
+    out_boxes = post.apply(
+        boxes=boxes,
+        img_size=(orig_w, orig_h),
+        threshold=threshold,
+        layout_nms=layout_nms,
+        layout_unclip_ratio=layout_unclip_ratio,
+        layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+        masks=masks,
+        layout_shape_mode=effective_layout_shape_mode,
+    )
 
-    # Optional NMS (usually unnecessary because model already did NMS, but kept for compatibility)
-    if layout_nms and boxes.shape[0] > 1:
-        selected_indices = nms(boxes[:, :6], iou_same=0.6, iou_diff=0.98)
-        boxes = np.array(boxes[selected_indices], dtype=np.float32)
+    if filter_overlap_boxes:
+        out_boxes = processors.filter_boxes(out_boxes, effective_layout_shape_mode)
 
-    # Optional merge/containment logic (kept as-is)
-    if layout_merge_bboxes_mode:
-        formula_index = label_list.index("formula") if "formula" in label_list else None
-        if isinstance(layout_merge_bboxes_mode, str):
-            assert layout_merge_bboxes_mode in ["union", "large", "small"]
-            if layout_merge_bboxes_mode != "union":
-                contains_other, contained_by_other = check_containment(boxes[:, :6], formula_index)
-                if layout_merge_bboxes_mode == "large":
-                    boxes = boxes[contained_by_other == 0]
-                elif layout_merge_bboxes_mode == "small":
-                    boxes = boxes[(contains_other == 0) | (contained_by_other == 1)]
-        elif isinstance(layout_merge_bboxes_mode, dict):
-            keep_mask = np.ones(len(boxes), dtype=bool)
-            for category_index, layout_mode in layout_merge_bboxes_mode.items():
-                assert layout_mode in ["union", "large", "small"]
-                if layout_mode == "union":
-                    continue
-                contains_other, contained_by_other = check_containment(
-                    boxes[:, :6], formula_index, category_index, mode=layout_mode
-                )
-                if layout_mode == "large":
-                    keep_mask &= contained_by_other == 0
-                elif layout_mode == "small":
-                    keep_mask &= (contains_other == 0) | (contained_by_other == 1)
-            boxes = boxes[keep_mask]
-        else:
-            raise ValueError("layout_merge_bboxes_mode must be str or dict")
+    if skip_order_labels is None:
+        skip_order_labels = processors.SKIP_ORDER_LABELS
+    # 对齐 PaddleX：不在这里额外重排 boxes。
+    # PaddleX 侧 `update_order_index()` 只按当前列表顺序编号，不负责排序；
+    # `LayoutAnalysisProcess.apply(...)` 的输出顺序即为后续 parsing_res_list 的基础顺序，
+    # 若这里再做 (y,x) 阅读顺序排序，会导致 block_id/显示顺序与 PaddleX 不一致（例如 header/number 对调）。
+    out_boxes = processors.update_order_index(out_boxes, skip_order_labels)
+    return out_boxes
 
-    if boxes.size == 0:
-        return []
-
-    # Optional unclip
-    if layout_unclip_ratio:
-        if isinstance(layout_unclip_ratio, float):
-            layout_unclip_ratio = (layout_unclip_ratio, layout_unclip_ratio)
-        elif isinstance(layout_unclip_ratio, (tuple, list)):
-            assert len(layout_unclip_ratio) == 2
-        elif isinstance(layout_unclip_ratio, dict):
-            pass
-        else:
-            raise ValueError(f"Unsupported layout_unclip_ratio type: {type(layout_unclip_ratio)}")
-        boxes = unclip_boxes(boxes, layout_unclip_ratio)
-
-    # Convert to dict list (clip to original image)
-    return restructured_boxes(boxes, label_list, (orig_w, orig_h))
-
-def postprocess_detections_detr(output, scale_h, scale_w, orig_h, orig_w, threshold=0.5,
-                                layout_nms=False, layout_unclip_ratio=None, layout_merge_bboxes_mode=None):
+def postprocess_detections_detr(
+    output,
+    scale_h,
+    scale_w,
+    orig_h,
+    orig_w,
+    threshold=0.5,
+    layout_nms=False,
+    layout_unclip_ratio=None,
+    layout_merge_bboxes_mode=None,
+    layout_shape_mode: str = "auto",
+    filter_overlap_boxes: bool = True,
+    skip_order_labels: Optional[List[str]] = None,
+):
     """
     Postprocess DETR-style detection outputs.
     
@@ -701,12 +531,15 @@ def postprocess_detections_detr(output, scale_h, scale_w, orig_h, orig_w, thresh
     """
     if isinstance(output, (list, tuple)):
         output0, output1 = output[0], output[1] if len(output) > 1 else None
+        masks = output[2] if len(output) > 2 else None
     else:
-        output0, output1 = output, None
+        output0, output1, masks = output, None, None
     
     output0 = np.array(output0)
     if output1 is not None:
         output1 = np.array(output1)
+    if masks is not None:
+        masks = np.array(masks)
     
     # Handle 3D arrays with batch dimension of 1: squeeze the first dimension
     if len(output0.shape) == 3 and output0.shape[0] == 1:
@@ -754,133 +587,47 @@ def postprocess_detections_detr(output, scale_h, scale_w, orig_h, orig_w, thresh
             boxes[:, 2:6] = output0[:, 2:6]
     else:
         raise ValueError(f"Unable to process output format, output[0] shape: {output0.shape}")
-    
-    # Step 1: Threshold filtering
-    if isinstance(threshold, float):
-        expect_boxes = (boxes[:, 1] > threshold) & (boxes[:, 0] > -1)
-        boxes = boxes[expect_boxes, :]
-    elif isinstance(threshold, dict):
-        category_filtered_boxes = []
-        for cat_id in np.unique(boxes[:, 0]):
-            category_boxes = boxes[boxes[:, 0] == cat_id]
-            category_threshold = threshold.get(int(cat_id), 0.5)
-            selected_indices = (category_boxes[:, 1] > category_threshold) & (category_boxes[:, 0] > -1)
-            category_filtered_boxes.append(category_boxes[selected_indices])
-        boxes = np.vstack(category_filtered_boxes) if category_filtered_boxes else np.array([])
-    
-    if boxes.size == 0:
-        return []
-    
-    if layout_nms:
-        selected_indices = nms(boxes[:, :6], iou_same=0.6, iou_diff=0.98)
-        boxes = np.array(boxes[selected_indices])
-    
-    filter_large_image = True
-    if filter_large_image and len(boxes) > 1 and boxes.shape[1] in [6, 8]:
-        if orig_w > orig_h:
-            area_thres = 0.82
-        else:
-            area_thres = 0.93
-        image_index = label_list.index("image") if "image" in label_list else None
-        img_area = orig_w * orig_h
-        filtered_boxes = []
-        for box in boxes:
-            label_index, score, xmin, ymin, xmax, ymax = box[:6]
-            if label_index == image_index:
-                xmin = max(0, xmin)
-                ymin = max(0, ymin)
-                xmax = min(orig_w, xmax)
-                ymax = min(orig_h, ymax)
-                box_area = (xmax - xmin) * (ymax - ymin)
-                if box_area <= area_thres * img_area:
-                    filtered_boxes.append(box)
-            else:
-                filtered_boxes.append(box)
-        if len(filtered_boxes) == 0:
-            filtered_boxes = boxes
-        boxes = np.array(filtered_boxes)
-    
-    if layout_merge_bboxes_mode:
-        formula_index = label_list.index("formula") if "formula" in label_list else None
-        if isinstance(layout_merge_bboxes_mode, str):
-            assert layout_merge_bboxes_mode in [
-                "union",
-                "large",
-                "small",
-            ], f"The value of `layout_merge_bboxes_mode` must be one of ['union', 'large', 'small'], but got {layout_merge_bboxes_mode}"
-            
-            if layout_merge_bboxes_mode == "union":
-                pass
-            else:
-                contains_other, contained_by_other = check_containment(
-                    boxes[:, :6], formula_index
-                )
-                if layout_merge_bboxes_mode == "large":
-                    boxes = boxes[contained_by_other == 0]
-                elif layout_merge_bboxes_mode == "small":
-                    boxes = boxes[(contains_other == 0) | (contained_by_other == 1)]
-        elif isinstance(layout_merge_bboxes_mode, dict):
-            keep_mask = np.ones(len(boxes), dtype=bool)
-            for category_index, layout_mode in layout_merge_bboxes_mode.items():
-                assert layout_mode in [
-                    "union",
-                    "large",
-                    "small",
-                ], f"The value of `layout_merge_bboxes_mode` must be one of ['union', 'large', 'small'], but got {layout_mode}"
-                if layout_mode == "union":
-                    pass
-                else:
-                    if layout_mode == "large":
-                        contains_other, contained_by_other = check_containment(
-                            boxes[:, :6],
-                            formula_index,
-                            category_index,
-                            mode=layout_mode,
-                        )
-                        keep_mask &= contained_by_other == 0
-                    elif layout_mode == "small":
-                        contains_other, contained_by_other = check_containment(
-                            boxes[:, :6],
-                            formula_index,
-                            category_index,
-                            mode=layout_mode,
-                        )
-                        keep_mask &= (contains_other == 0) | (contained_by_other == 1)
-            boxes = boxes[keep_mask]
-    
-    if boxes.size == 0:
-        return []
-    
-    if boxes.shape[1] == 8:
-        sorted_idx = np.lexsort((-boxes[:, 7], boxes[:, 6]))
-        sorted_boxes = boxes[sorted_idx]
-        boxes = sorted_boxes[:, :6]
-    
-    if layout_unclip_ratio:
-        if isinstance(layout_unclip_ratio, float):
-            layout_unclip_ratio = (layout_unclip_ratio, layout_unclip_ratio)
-        elif isinstance(layout_unclip_ratio, (tuple, list)):
-            assert (
-                len(layout_unclip_ratio) == 2
-            ), f"The length of `layout_unclip_ratio` should be 2."
-        elif isinstance(layout_unclip_ratio, dict):
-            pass
-        else:
-            raise ValueError(
-                f"The type of `layout_unclip_ratio` must be float, Tuple[float, float] or Dict[int, Tuple[float, float]], but got {type(layout_unclip_ratio)}."
+
+    # Align with PaddleX: round bbox coords to int-like values early
+    # (PaddleX does np.round(...).astype(int) before further filtering/NMS)
+    if boxes.size > 0 and boxes.shape[1] >= 6:
+        boxes[:, 2:6] = np.round(boxes[:, 2:6]).astype(np.float32)
+
+    # # 尽量对齐 Paddle 的 auto polygon 决策：在提取 polygon 前先排序 boxes/masks
+    # if masks is not None:
+    #     boxes, masks = _sort_boxes_and_masks_by_reading_order(boxes, masks)
+
+    # 对齐 PaddleX：当模型输出不含 masks 时，强制使用 rect
+    effective_layout_shape_mode = layout_shape_mode
+    if masks is None:
+        if layout_shape_mode not in ("rect", "auto"):
+            logging.warning(
+                "The model you are using does not support polygon output, but the "
+                f"layout_shape_mode is specified as {layout_shape_mode}, which will be set to 'rect'"
             )
-        boxes = unclip_boxes(boxes, layout_unclip_ratio)
+        effective_layout_shape_mode = "rect"
     
-    if boxes.shape[1] == 6:
-        boxes = restructured_boxes(boxes, label_list, (orig_w, orig_h))
-    elif boxes.shape[1] == 10:
-        raise ValueError("Rotated boxes are not supported")
-    else:
-        raise ValueError(
-            f"The shape of boxes should be 6 or 10, instead of {boxes.shape[1]}"
-        )
-    
-    return boxes
+    post = processors.LayoutAnalysisProcess(labels=label_list, scale_size=[800, 800])
+    # breakpoint()
+    out_boxes = post.apply(
+        boxes=boxes,
+        img_size=(orig_w, orig_h),
+        threshold=threshold,
+        layout_nms=layout_nms,
+        layout_unclip_ratio=layout_unclip_ratio,
+        layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+        masks=masks,
+        layout_shape_mode=effective_layout_shape_mode,
+    )
+
+    if filter_overlap_boxes:
+        out_boxes = processors.filter_boxes(out_boxes, effective_layout_shape_mode)
+
+    if skip_order_labels is None:
+        skip_order_labels = processors.SKIP_ORDER_LABELS
+    # 对齐 PaddleX：不在这里额外重排 boxes（原因同 postprocess_detections_paddle_nms）。
+    out_boxes = processors.update_order_index(out_boxes, skip_order_labels)
+    return out_boxes
 
 def _download_model_from_modelscope(model_id=LAYOUT_MODEL_ID, cache_dir=None, precision="fp32"):
     """
@@ -1018,7 +765,7 @@ def _get_model_path(model_path, cache_dir=None, precision="fp32"):
 
 def paddle_ov_doclayout(model_path, image_path, output_dir, device="GPU", threshold=0.5, 
                         layout_nms=True, layout_unclip_ratio=None, layout_merge_bboxes_mode=None, 
-                        cache_dir=None, precision="fp32"):
+                        cache_dir=None, precision="fp32", layout_shape_mode: str = "auto"):
     """
     Perform layout detection inference using OpenVINO.
     
@@ -1037,6 +784,11 @@ def paddle_ov_doclayout(model_path, image_path, output_dir, device="GPU", thresh
                    - "fp32": FP32 precision model (more accurate, default)
                    - "combined_fp16": FP16 combined model (merged batch size and boxes nodes)
                    - "combined_fp32": FP32 combined model (merged batch size and boxes nodes)
+        layout_shape_mode: Layout polygon shape mode, one of {"auto","rect","quad","poly"}.
+            - auto: 根据 mask 几何关系自动在 polygon/quad/rect 间选择（与 PaddleX 默认一致）
+            - rect: 强制矩形（4点）
+            - quad: 强制四边形（4点，最小外接旋转矩形）
+            - poly: 强制多边形（N点，点数可能随 mask 细节变化）
     
     Returns:
         LayoutDetectionResult: Detection result object
@@ -1122,14 +874,17 @@ def paddle_ov_doclayout(model_path, image_path, output_dir, device="GPU", thresh
         input_tensors_ov[inp_name] = ov.Tensor(data)
     
     # Execute inference
-    result = compiled_model(input_tensors_ov)
+    infer_result = compiled_model(input_tensors_ov)
+
+    # breakpoint()
     
     # Extract output results
     output = []
     for out in output_tensors:
-        output_tensor = result[out]
+        output_tensor = infer_result[out]
         output_data = output_tensor.data
         output.append(output_data)
+    # breakpoint()
     
     # Post-processing
     if layout_unclip_ratio is None:
@@ -1148,6 +903,7 @@ def paddle_ov_doclayout(model_path, image_path, output_dir, device="GPU", thresh
             layout_nms=layout_nms,
             layout_unclip_ratio=layout_unclip_ratio,
             layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+            layout_shape_mode=layout_shape_mode,
         )
     else:
         # Fallback to DETR-style postprocess (older models)
@@ -1159,21 +915,27 @@ def paddle_ov_doclayout(model_path, image_path, output_dir, device="GPU", thresh
             threshold=threshold,
             layout_nms=layout_nms,
             layout_unclip_ratio=layout_unclip_ratio,
-            layout_merge_bboxes_mode=layout_merge_bboxes_mode
+            layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+            layout_shape_mode=layout_shape_mode,
         )
     
-    # Create result object
-    result_obj = LayoutDetectionResult(
-        input_path=os.path.abspath(image_path),
-        boxes=results,
-        page_index=None,
-        input_img=image
+    # Create result object (align with PaddleX/PaddleOCR style)
+    result_obj = result.LayoutAnalysisResult(
+        {
+            "input_path": os.path.abspath(image_path),
+            "page_index": None,
+            "input_img": image,
+            "boxes": results,
+        }
     )
     
     # Save results
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result_obj.save_to_img(save_path=str(output_dir))
+    # Match previous naming: <stem>_res.<suffix>
+    stem = Path(image_path).stem
+    suffix = Path(image_path).suffix or ".png"
+    result_obj.save_to_img(save_path=str(output_dir / f"{stem}_res{suffix}"))
     result_obj.save_to_json(save_path=str(output_dir / "res.json"))
     
     return result_obj
@@ -1229,6 +991,15 @@ def main():
         default=0.5,
         help="Detection confidence threshold (default: 0.5)"
     )
+    parser.add_argument(
+        "--layout_shape_mode",
+        type=str,
+        default="auto",
+        choices=["auto", "rect", "quad", "poly"],
+        help="Layout polygon shape mode (default: auto). "
+             "auto: auto select polygon/quad/rect; rect: force 4-pt rectangle; "
+             "quad: force 4-pt rotated quad; poly: force polygon (N-pt)."
+    )
     
     args = parser.parse_args()
     
@@ -1246,11 +1017,12 @@ def main():
         layout_unclip_ratio=None,
         layout_merge_bboxes_mode=None,
         cache_dir=args.cache_dir,
-        precision=args.precision
+        precision=args.precision,
+        layout_shape_mode=args.layout_shape_mode,
     )
     
     print(f"\nDetection completed! Results saved to: {args.output_dir}")
-    print(f"Detected {len(result_obj.boxes)} valid boxes")
+    print(f"Detected {len(result_obj.get('boxes', []))} valid boxes")
     
     return result_obj
 

@@ -20,7 +20,7 @@ def main() -> int:
     parser.add_argument(
         "--layout-threshold",
         type=float,
-        default=0.5,
+        default=0.3,
         help="layout 置信度阈值（layout-only / 完整 pipeline 两种模式都生效）",
     )
     args = parser.parse_args()
@@ -45,27 +45,31 @@ def main() -> int:
     from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
     pipeline = PaddleOCRVL(
-        layout_model_path=None,  # 自动下载
-        vlm_model_path=None,  # 自动下载
+        layout_model_path="./PP-DocLayoutV3-0125-ov",  
+        vlm_model_path="./ov_paddleocr_vl_model", 
         vlm_device=args.device,
         layout_device=args.device,
         layout_precision=args.layout_precision,
         llm_int4_compress=False,
-        vision_int8_quant=True,
-        llm_int8_compress=True,
-        llm_int8_quant=True,
+        vision_int8_quant=False,
+        llm_int8_compress=False,
+        llm_int8_quant=False,
     )
 
     print("开始识别...")
     output = pipeline.predict(
         args.image,
-        layout_threshold=args.layout_threshold,
+        layout_threshold=0.3,
+        layout_shape_mode="auto",
+        use_chart_recognition=False,
+        use_seal_recognition=False,
     )
 
     for res in output:
-        res.print()
+        # res.print()
         res.save_to_json(save_path=args.output)
-        res.save_to_markdown(save_path=args.output)
+        res.save_to_img(save_path=args.output)
+        res.save_to_markdown(save_path=args.output, pretty=False)
 
     return 0
 
