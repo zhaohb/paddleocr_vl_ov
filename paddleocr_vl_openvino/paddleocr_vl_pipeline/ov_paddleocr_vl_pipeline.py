@@ -2306,7 +2306,7 @@ class PaddleOCRVL:
             # pil_image.save(save_path)
             # print(f"Saved pil_image to: {save_path}")
             # # breakpoint()
-            pil_image = pil_image.resize((1200, 800), Image.Resampling.LANCZOS)
+            # pil_image = pil_image.resize((1200, 800), Image.Resampling.LANCZOS)
             
             # 准备输入消息（与 torch_ov_test.py 一致）
             messages = [
