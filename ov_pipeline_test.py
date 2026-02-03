@@ -45,8 +45,8 @@ def main() -> int:
     from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 
     pipeline = PaddleOCRVL(
-        layout_model_path="./PP-DocLayoutV3-0125-ov",  
-        vlm_model_path="./ov_paddleocr_vl_model", 
+        layout_model_path="./PP-DoclayoutV3-ov",
+        vlm_model_path="./PaddleOCR-VL-1.5-ov",
         vlm_device=args.device,
         layout_device=args.device,
         layout_precision=args.layout_precision,

@@ -124,16 +124,13 @@ class PaddleOCRVLPreprocessor:
 {%- if not eos_token is defined -%}
     {%- set eos_token = "</s>" -%}
 {%- endif -%}
-{%- if not image_token is defined -%}
-    {%- set image_token = "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" -%}
-{%- endif -%}
 {{- cls_token -}}
 {%- for message in messages -%}
     {%- if message["role"] == "user" -%}
         {{- "User: " -}}
         {%- for content in message["content"] -%}
             {%- if content["type"] == "image" -%}
-                {{ image_token }}
+                {{ "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" }}
             {%- endif -%}
         {%- endfor -%}
         {%- for content in message["content"] -%}
@@ -143,7 +140,7 @@ class PaddleOCRVLPreprocessor:
         {%- endfor -%}
         {{ "\n" -}}
     {%- elif message["role"] == "assistant" -%}
-        {{- "Assistant: " -}}
+        {{- "Assistant:\n" -}}
         {%- for content in message["content"] -%}
             {%- if content["type"] == "text" -%}
                 {{ content["text"] }}
@@ -159,7 +156,7 @@ class PaddleOCRVLPreprocessor:
     {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
-    {{- "Assistant: " -}}
+    {{- "Assistant:\n" -}}
 {%- endif -%}
 """
         
