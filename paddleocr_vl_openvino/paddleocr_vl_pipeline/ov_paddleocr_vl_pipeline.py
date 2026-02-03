@@ -1072,9 +1072,14 @@ class PaddleOCRVL:
     使用 OpenVINO 进行布局检测和 VLM 推理
     """
     
-    # ModelScope 模型 ID
-    LAYOUT_MODEL_ID = "zhaohb/PP-DocLayoutV2-ov"
-    VLM_MODEL_ID = "zhaohb/PaddleOCR-Vl-OV"
+    # ModelScope 模型 ID（对齐 PaddleOCR-VL-1.5-ov 仓库结构）
+    # - layout:  https://www.modelscope.cn/models/zhaohb/PaddleOCR-VL-1.5-ov/tree/master/PP-DoclayoutV3-ov
+    # - vlm:     https://www.modelscope.cn/models/zhaohb/PaddleOCR-VL-1.5-ov/tree/master/PaddleOCR-VL-1.5-ov
+    MODELSCOPE_REPO_ID = "zhaohb/PaddleOCR-VL-1.5-ov"
+    LAYOUT_SUBDIR = "PP-DoclayoutV3-ov"
+    VLM_SUBDIR = "PaddleOCR-VL-1.5-ov"
+    # DocLayoutV3-ov 当前目录仅提供一个 .xml（不再区分 precision）
+    LAYOUT_XML_FILENAME = "DocLayoutV3.xml"
     
     def __init__(
         self,
@@ -1130,19 +1135,14 @@ class PaddleOCRVL:
         self.cache_dir = cache_dir
         self.layout_precision = layout_precision
         
-        # 验证 precision 参数
-        valid_precisions = ["fp16", "fp32", "combined_fp16", "combined_fp32"]
-        if layout_precision not in valid_precisions:
-            raise ValueError(
-                f"Unsupported layout_precision: {layout_precision}. "
-                f"Supported options: {valid_precisions}"
-            )
+        # NOTE: DocLayoutV3-ov 当前仅提供单一 xml，不再根据 layout_precision 选择文件。
+        # 保留该参数仅用于兼容旧调用，不做校验/分支选择。
         
         # 自动下载或验证模型路径
         if layout_model_path is None:
             if not MODELSCOPE_AVAILABLE:
                 raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
-            print(f"📥 自动下载布局检测模型: {self.LAYOUT_MODEL_ID} (precision: {layout_precision})")
+            print(f"📥 自动下载布局检测模型: {self.MODELSCOPE_REPO_ID}/{self.LAYOUT_SUBDIR}")
             layout_model_path = self._download_layout_model()
         else:
             layout_model_path = self._ensure_layout_model(layout_model_path)
@@ -1150,7 +1150,7 @@ class PaddleOCRVL:
         if vlm_model_path is None:
             if not MODELSCOPE_AVAILABLE:
                 raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
-            print(f"📥 自动下载 VLM 模型: {self.VLM_MODEL_ID}")
+            print(f"📥 自动下载 VLM 模型: {self.MODELSCOPE_REPO_ID}/{self.VLM_SUBDIR}")
             vlm_model_path = self._download_vlm_model()
         else:
             vlm_model_path = self._ensure_vlm_model(vlm_model_path)
@@ -1175,44 +1175,21 @@ class PaddleOCRVL:
         if not MODELSCOPE_AVAILABLE:
             raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
         
-        print(f"正在从 ModelScope 下载布局检测模型: {self.LAYOUT_MODEL_ID}")
-        model_dir = snapshot_download(self.LAYOUT_MODEL_ID, cache_dir=self.cache_dir)
-        model_dir = Path(model_dir)
-        xml_files: List[Path] = []
+        print(f"正在从 ModelScope 下载布局检测模型: {self.MODELSCOPE_REPO_ID}/{self.LAYOUT_SUBDIR}")
+        repo_dir = Path(snapshot_download(self.MODELSCOPE_REPO_ID, cache_dir=self.cache_dir))
+        model_dir = repo_dir / self.LAYOUT_SUBDIR
+        if not model_dir.exists():
+            raise FileNotFoundError(f"未找到布局检测子目录: {model_dir}")
         
-        # 根据 precision 选择对应的模型文件
-        precision_map = {
-            "fp16": "pp_doclayoutv2_f16.xml",
-            "fp32": "pp_doclayoutv2_f32.xml",
-            "combined_fp16": "pp_doclayoutv2_f16_combined.xml",
-            "combined_fp32": "pp_doclayoutv2_f32_combined.xml",
-        }
-        
-        model_filename = precision_map.get(self.layout_precision)
-        model_path = model_dir / model_filename if model_filename else None
-        
-        # 如果指定的精度文件不存在，尝试查找其他可用的模型文件
-        if model_path is None or not model_path.exists():
-            print(f"⚠️  指定的精度模型文件不存在: {model_filename if model_filename else 'N/A'}")
-            # 查找所有 .xml 文件
+        # DocLayoutV3-ov：优先使用固定文件名；若不存在则回退到目录中唯一/第一个 xml
+        model_path = model_dir / self.LAYOUT_XML_FILENAME
+        if not model_path.exists():
             xml_files = list(model_dir.glob("*.xml"))
             if not xml_files:
-                raise FileNotFoundError(
-                    f"在下载的模型目录中未找到 .xml 文件: {model_dir}\n"
-                    f"layout_precision={self.layout_precision}"
-                )
-
-            # 优先选择合并版本（combined_*）
-            combined_files = [f for f in xml_files if "combined" in f.name]
-            if combined_files:
-                model_path = combined_files[0]
-                print(f"⚠️  使用找到的合并模型: {model_path.name}")
-            else:
-                # 否则使用第一个找到的文件
-                model_path = xml_files[0]
-                print(f"⚠️  使用找到的模型: {model_path.name}")
-        else:
-            print(f"✅ 使用指定的精度模型: {model_filename}")
+                raise FileNotFoundError(f"在下载的模型目录中未找到 .xml 文件: {model_dir}")
+            if len(xml_files) > 1:
+                print(f"⚠️  发现多个布局检测 xml，将使用第一个：{xml_files[0].name}")
+            model_path = xml_files[0]
         
         # 检查对应的 .bin 文件是否存在
         bin_path = model_path.with_suffix(".bin")
@@ -1227,8 +1204,11 @@ class PaddleOCRVL:
         if not MODELSCOPE_AVAILABLE:
             raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
         
-        print(f"正在从 ModelScope 下载 VLM 模型: {self.VLM_MODEL_ID}")
-        model_dir = snapshot_download(self.VLM_MODEL_ID, cache_dir=self.cache_dir)
+        print(f"正在从 ModelScope 下载 VLM 模型: {self.MODELSCOPE_REPO_ID}/{self.VLM_SUBDIR}")
+        repo_dir = Path(snapshot_download(self.MODELSCOPE_REPO_ID, cache_dir=self.cache_dir))
+        model_dir = repo_dir / self.VLM_SUBDIR
+        if not model_dir.exists():
+            raise FileNotFoundError(f"未找到 VLM 子目录: {model_dir}")
         
         # 验证必要的文件是否存在
         required_files = ["vision.xml", "llm_stateful.xml", "llm_embd.xml"]
@@ -1253,35 +1233,18 @@ class PaddleOCRVL:
         
         # 如果是目录，根据 precision 查找对应的 .xml 文件
         if model_path_obj.is_dir():
-            # 根据 precision 优先级搜索
-            precision_map = {
-                "fp16": ["pp_doclayoutv2_f16.xml", "*.xml"],
-                "fp32": ["pp_doclayoutv2_f32.xml", "*.xml"],
-                "combined_fp16": ["pp_doclayoutv2_f16_combined.xml", "pp_doclayoutv2_f16.xml", "*.xml"],
-                "combined_fp32": ["pp_doclayoutv2_f32_combined.xml", "pp_doclayoutv2_f32.xml", "*.xml"],
-            }
+            # DocLayoutV3-ov：目录下通常只有一个 xml，优先使用固定文件名，否则取第一个 xml
+            xml_file = model_path_obj / self.LAYOUT_XML_FILENAME
+            if not xml_file.exists():
+                xml_files = list(model_path_obj.glob("*.xml"))
+                xml_file = xml_files[0] if xml_files else None
             
-            search_patterns = precision_map.get(self.layout_precision, ["*.xml"])
-            xml_file = None
-            
-            for pattern in search_patterns:
-                if pattern == "*.xml":
-                    xml_files = list(model_path_obj.glob(pattern))
-                    if xml_files:
-                        xml_file = xml_files[0]
-                    break
-                else:
-                    candidate = model_path_obj / pattern
-                    if candidate.exists():
-                        xml_file = candidate
-                        break
-            
-            if xml_file is None:
+            if xml_file is None or not Path(xml_file).exists():
                 print(f"⚠️  在指定目录中未找到匹配的 .xml 文件，尝试自动下载: {model_path}")
                 return self._download_layout_model()
             
             # 检查对应的 .bin 文件是否存在
-            bin_path = xml_file.with_suffix(".bin")
+            bin_path = Path(xml_file).with_suffix(".bin")
             if not bin_path.exists():
                 print(f"⚠️  对应的 .bin 文件不存在: {bin_path}，尝试自动下载")
                 return self._download_layout_model()

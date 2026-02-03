@@ -15,7 +15,8 @@ def main() -> int:
         "--layout-precision",
         type=str,
         default="fp16",
-        help="layout 模型精度：fp16/fp32/combined_fp16/combined_fp32（layout-only / 完整 pipeline 两种模式都生效）",
+        choices=["fp16"],
+        help="layout 模型精度：目前仅支持 fp16（DocLayoutV3.xml 单文件）",
     )
     parser.add_argument(
         "--layout-threshold",

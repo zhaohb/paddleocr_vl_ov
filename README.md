@@ -1,12 +1,11 @@
-# PaddleOCR-VL OpenVINO
+# PaddleOCR-VL-1.5 OpenVINO
 
 ![PaddleOCR-VL APP](./client_app/images/gui.png)
 
-A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, supporting document layout detection and Vision Language Model (VLM) inference. Features automatic model downloading for out-of-the-box usage.
+A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL-1.5, supporting document layout detection and Vision Language Model (VLM) inference. Features automatic model downloading for out-of-the-box usage.
 
 ## 📋 Table of Contents
 
-- [Features](#features)
 - [Project Structure](#project-structure)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
@@ -14,37 +13,6 @@ A complete document understanding pipeline based on OpenVINO for PaddleOCR-VL, s
 - [API Documentation](#api-documentation)
 - [Model Download](#model-download)
 - [Contact](#contact)
-
-## ✨ Features
-
-- ✅ **Complete Document Understanding Pipeline**
-  - Document layout detection (PP-DocLayoutV2)
-  - Vision Language Model (VLM) inference
-  - Support for multiple document element recognition (text, tables, charts, formulas, etc.)
-
-- ✅ **OpenVINO-based Inference**
-  - Support for multiple devices: CPU, GPU, NPU, etc.
-  - High-performance inference acceleration
-  - Memory optimization
-
-- ✅ **Automatic Model Download**
-  - Automatic model download from ModelScope
-  - Intelligent model path detection and validation
-  - Ready to use out of the box, no manual model download required
-
-- ✅ **Compatible with PaddleX**
-  - Fully compatible with PaddleX's preprocessing and post-processing logic
-  - Support for layout block merging and filtering
-  - Support for Markdown output format
-
-- ✅ **Flexible Device Configuration**
-  - Independent device configuration for layout detection and VLM models
-  - Support for mixed device deployment (e.g., NPU for layout detection, GPU for VLM)
-
-- ✅ **Model Quantization & Compression**
-  - Support for INT4/INT8 quantization compression
-  - Configurable quantization options for LLM and Vision models
-  - Balance between model size, inference speed, and accuracy
 
 ## 📁 Project Structure
 
@@ -160,7 +128,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,      # Automatically download VLM model
     vlm_device="GPU", 
     layout_device="GPU",
-    layout_precision="fp16",  # Layout model precision: fp16 (faster), fp32 (more accurate), combined_fp16, combined_fp32
+    layout_precision="fp16",  
     llm_int4_compress=False,  # LLM INT4 quantization compression
     vision_int8_quant=True,   # Vision model INT8 quantization
     llm_int8_compress=True,   # LLM INT8 quantization compression
@@ -208,7 +176,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,     # Automatic download
     vlm_device="GPU", 
     layout_device="GPU",
-    layout_precision="fp16",  # Layout model precision: fp16 (faster), fp32 (more accurate)
+    layout_precision="fp16",
     llm_int4_compress=False,  # LLM INT4 quantization compression
     vision_int8_quant=True,   # Vision model INT8 quantization
     llm_int8_compress=True,   # LLM INT8 quantization compression
@@ -244,7 +212,7 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,     # Automatically download VLM model
     vlm_device="GPU",        # Use GPU for VLM model
     layout_device="GPU",     # Use GPU for layout detection model
-    layout_precision="fp16",  # Layout model precision: fp16 (faster), fp32 (more accurate), combined_fp16, combined_fp32
+    layout_precision="fp16",
     llm_int4_compress=False,  # LLM INT4 quantization compression (default: False)
     vision_int8_quant=True,   # Vision model INT8 quantization (default: True)
     llm_int8_compress=True,   # LLM INT8 quantization compression (default: True)
@@ -284,7 +252,7 @@ for res in output:
 | `merge_layout_blocks` | `bool` | `True` | Whether to merge layout blocks |
 | `markdown_ignore_labels` | `List[str]` | `None` | List of labels to ignore in Markdown output |
 | `cache_dir` | `Optional[str]` | `None` | ModelScope model cache directory, uses default cache directory if `None` |
-| `layout_precision` | `str` | `"fp16"` | Layout detection model precision selection: `"fp16"`, `"fp32"`, `"combined_fp16"`, `"combined_fp32"`<br>- `"fp16"`: FP16 precision model (faster, lower memory usage, default)<br>- `"fp32"`: FP32 precision model (more accurate)<br>- `"combined_fp16"`: FP16 combined model (merged batch size and boxes nodes)<br>- `"combined_fp32"`: FP32 combined model (merged batch size and boxes nodes)<br>**Note:** Only effective when `layout_model_path` is `None` (auto-download) or points to a directory. If `layout_model_path` points to a specific `.xml` file, this parameter will be ignored |
+| `layout_precision` | `str` | `"fp16"` | Layout detection model precision selection: currently only `"fp16"` (DocLayoutV3.xml single-file model). This parameter is kept for backward compatibility and will be ignored. |
 | `llm_int4_compress` | `bool` | `False` | Enable LLM INT4 quantization compression (significantly reduces model size and memory usage, may slightly affect accuracy) |
 | `vision_int8_quant` | `bool` | `True` | Enable Vision model INT8 quantization (balances accuracy and performance) |
 | `llm_int8_compress` | `bool` | `True` | Enable LLM INT8 quantization compression (reduces model size, may slightly affect accuracy) |
@@ -342,49 +310,31 @@ Models will be automatically downloaded from ModelScope on first use, no manual 
 
 If you need to manually download models, you can use the following methods:
 
-#### PP-DocLayoutV2 Layout Detection Model
+#### PaddleOCR-VL-1.5-ov (Layout + VLM)
 
-**ModelScope**: [PP-DocLayoutV2-ov](https://www.modelscope.cn/models/zhaohb/PP-DocLayoutV2-ov)
+Both the layout model and the VLM model are provided under the same ModelScope repository:
 
-```bash
-# Using ModelScope SDK
-pip install modelscope
-python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PP-DocLayoutV2-ov')"
-```
+**ModelScope**: [PaddleOCR-VL-1.5-ov](https://www.modelscope.cn/models/zhaohb/PaddleOCR-VL-1.5-ov)
 
-**Layout Detection Model Precision Selection:**
+Repository structure (subdirectories):
 
-The layout detection model (PP-DocLayoutV2-ov) provides multiple precision variants. You can select the desired precision using the `layout_precision` parameter:
-
-- **`fp16`** (default): FP16 precision model
-  - Faster inference speed
-  - Lower memory usage
-  - Suitable for most use cases
-  
-- **`fp32`**: FP32 precision model
-  - Higher accuracy
-  - More memory usage
-  - Suitable for accuracy-critical applications
-  
-- **`combined_fp16`**: FP16 combined model
-  - Merged batch size and boxes nodes
-  - Faster inference with simplified output format
-  
-- **`combined_fp32`**: FP32 combined model
-  - Merged batch size and boxes nodes
-  - Higher accuracy with simplified output format
-
-**Note:** The `layout_precision` parameter only takes effect when `layout_model_path` is `None` (auto-download) or points to a directory. If `layout_model_path` points to a specific `.xml` file, the precision parameter will be ignored and the specified model file will be used directly.
-
-#### PaddleOCR-VL VLM Model
-
-**ModelScope**: [PaddleOCR-Vl-OV](https://www.modelscope.cn/models/zhaohb/PaddleOCR-Vl-OV)
+- **Layout (DocLayoutV3-ov)**: `PP-DoclayoutV3-ov/DocLayoutV3.xml`
+  - Currently only a single-file model is provided (**no precision variants**)
+  - The `layout_precision` parameter is kept for backward compatibility and will be ignored
+- **VLM (PaddleOCR-VL-1.5-ov)**: `PaddleOCR-VL-1.5-ov/` (contains `vision.xml`, `llm_stateful.xml`, `llm_embd.xml`, etc.)
 
 ```bash
 # Using ModelScope SDK
 pip install modelscope
-python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PaddleOCR-Vl-OV')"
+python -c "from modelscope import snapshot_download; snapshot_download('zhaohb/PaddleOCR-VL-1.5-ov')"
 ```
+
+After downloading, set:
+
+- `layout_model_path` to `.../PP-DoclayoutV3-ov/DocLayoutV3.xml` (or the `PP-DoclayoutV3-ov` directory)
+- `vlm_model_path` to `.../PaddleOCR-VL-1.5-ov` (directory)
+
+**Windows note:** ModelScope may warn about failing to create symbolic links. This does not affect usage; use the real cache directory path printed in logs.
 
 ### Model Caching
 
