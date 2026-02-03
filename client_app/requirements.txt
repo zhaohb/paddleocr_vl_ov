@@ -5,4 +5,8 @@ PyMuPDF>=1.24.0
 # The core project dependencies are expected to be installed in the same env.
 # If you don't have them yet, install the wheel or install from pyproject/requirements.
 
+# Keep aligned with project dependency pins
+transformers==4.54.0
+shapely>=2.1.2
+
 

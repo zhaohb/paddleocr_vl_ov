@@ -35,11 +35,12 @@ dependencies = [
     "uvicorn",
     "python-multipart",
     "gradio>=5.29.0",
-    "transformers>=4.54.0",
+    "transformers==4.54.0",
     "nncf>=2.18.0",
     "datasets>=3.6.0",
     "protobuf>=6.32.0",
     "sentencepiece>=0.2.1",
+    "shapely>=2.1.2",
 ]
 
 [project.optional-dependencies]

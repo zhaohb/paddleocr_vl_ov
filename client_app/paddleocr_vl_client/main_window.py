@@ -187,7 +187,8 @@ class MainWindow(QMainWindow):
             # Devices / precision
             self.combo_vlm_device.setCurrentText(self._qs_get_str("settings/vlm_device", self.combo_vlm_device.currentText()))
             self.combo_layout_device.setCurrentText(self._qs_get_str("settings/layout_device", self.combo_layout_device.currentText()))
-            self.combo_layout_precision.setCurrentText(self._qs_get_str("settings/layout_precision", self.combo_layout_precision.currentText()))
+            # 兼容旧配置：历史上可能保存了 fp32/combined_*，但当前 DocLayoutV3 仅支持 fp16
+            self.combo_layout_precision.setCurrentText("fp16")
 
             # Predict
             self.chk_use_layout.setChecked(self._qs_get_bool("settings/use_layout_detection", self.chk_use_layout.isChecked()))
@@ -687,9 +688,11 @@ class MainWindow(QMainWindow):
         self.combo_layout_device.setFrame(False)
 
         self.combo_layout_precision = QComboBox()
-        self.combo_layout_precision.addItems(["fp16", "fp32", "combined_fp16", "combined_fp32"])
+        # DocLayoutV3 当前仅提供单一 fp16 模型（DocLayoutV3.xml 单文件），不再暴露其它 precision 选项
+        self.combo_layout_precision.addItems(["fp16"])
         self.combo_layout_precision.setCurrentText("fp16")
         self.combo_layout_precision.setFrame(False)
+        self.combo_layout_precision.setEnabled(False)
 
         self.chk_use_layout = QCheckBox("")
         self.chk_use_layout.setChecked(True)

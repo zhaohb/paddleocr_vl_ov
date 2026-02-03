@@ -17,14 +17,28 @@ import logging
 try:
     from modelscope import snapshot_download
     MODELSCOPE_AVAILABLE = True
-except ImportError:
-    MODELSCOPE_AVAILABLE = False
-    logging.warning("modelscope not installed. Auto-download feature will be disabled. Install with: pip install modelscope")
 
-# 尝试导入 modelscope，如果未安装则给出提示
-try:
-    from modelscope import snapshot_download
-    MODELSCOPE_AVAILABLE = True
+    # Workaround (Windows + PySide6/shiboken):
+    # shiboken 的 import hook 会对模块做 inspect.unwrap()，其内部会通过 hasattr(x, "__wrapped__")
+    # 判断对象是否为 wrapper。ModelScope 使用 LazyImportModule 实现懒加载：当访问未知属性时会
+    # 触发 try_import_from_hf，进而要求 transformers/peft/diffusers，导致 "__wrapped__" 探测时报错。
+    # 对 "__wrapped__" 这种“探测属性”应该让 hasattr 返回 False，因此这里强制抛 AttributeError。
+    try:  # pragma: no cover
+        from modelscope.utils.import_utils import LazyImportModule as _MSLazyImportModule  # type: ignore
+
+        if not getattr(_MSLazyImportModule, "_paddleocr_vl_wrapped_patch", False):
+            _orig_getattr = _MSLazyImportModule.__getattr__
+
+            def _patched_getattr(self, name: str):  # type: ignore[no-redef]
+                if name == "__wrapped__":
+                    raise AttributeError(name)
+                return _orig_getattr(self, name)
+
+            _MSLazyImportModule.__getattr__ = _patched_getattr  # type: ignore[assignment]
+            _MSLazyImportModule._paddleocr_vl_wrapped_patch = True  # type: ignore[attr-defined]
+    except Exception:
+        # patch 失败不影响非 GUI 场景；依赖缺失时仍可走手动路径
+        pass
 except ImportError:
     MODELSCOPE_AVAILABLE = False
     logging.warning("modelscope not installed. Auto-download feature will be disabled. Install with: pip install modelscope")

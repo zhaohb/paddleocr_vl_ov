@@ -102,7 +102,6 @@ a = Analysis(
         "boto3",
         "botocore",
         "skimage",
-        "shapely",
         "emoji",
         "soundfile",
         "imageio",
