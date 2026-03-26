@@ -2,9 +2,15 @@
 OpenVINO 版本的 PaddleOCR-VL Pipeline 实现
 """
 
+import time
 import cv2
 import numpy as np
 from pathlib import Path
+
+# 设为 True 可打开 batch 推理的详细日志
+_BATCH_VERBOSE = True
+# 设为 False 可关闭 Pipeline 布局检测/VLM 推理的耗时日志
+_PIPELINE_VERBOSE = True
 from typing import Union, List, Optional, Dict, Any
 from functools import partial
 import random
@@ -76,11 +82,11 @@ BLOCK_LABEL_MAP = {
 def gather_imgs(original_img: np.ndarray, layout_det_objs: List[Dict]) -> List[Dict]:
     """
     从布局检测结果中提取图像区域
-    
+
     Args:
         original_img: 原始图像（BGR 格式）
         layout_det_objs: 布局检测结果列表，每个元素包含 label, coordinate, score 等字段
-    
+
     Returns:
         List[Dict]: 提取的图像列表，每个元素包含 path, img, coordinate, score
     """
@@ -291,28 +297,28 @@ def merge_formula_and_number(formula, formula_number):
 def fix_latex_syntax(text):
     """
     修复常见的 LaTeX 语法错误，特别是 VLM 模型生成的错误格式
-    
+
     Args:
         text: 包含 LaTeX 公式的文本
-    
+
     Returns:
         修复后的文本
     """
     import re
-    
+
     # 修复 \inS, \inR, \inN 等错误（应该是 \in S, \in \mathbb{R}, \in \mathbb{N}）
     # 匹配模式：\in[A-Z]（如 \inS, \inR, \inN）
     def fix_in_symbol(match):
         full_match = match.group(0)
         letter = full_match[-1]  # 获取最后一个字母
-        
+
         # 特殊处理：R -> \mathbb{R}, N -> \mathbb{N}, Z -> \mathbb{Z}, Q -> \mathbb{Q}, C -> \mathbb{C}
         if letter in ['R', 'N', 'Z', 'Q', 'C']:
             return f"\\in \\mathbb{{{letter}}}"
         else:
             # 其他情况：\inS -> \in S
             return f"\\in {letter}"
-    
+
     # 使用正则表达式查找并替换
     # 匹配 $...$ 或 $$...$$ 中的内容
     def fix_in_formula(match):
@@ -320,19 +326,19 @@ def fix_latex_syntax(text):
         # 修复 \in[A-Z] 模式
         formula_content = re.sub(r'\\in([A-Z])', fix_in_symbol, formula_content)
         return f"${formula_content}$"
-    
+
     # 修复行内公式 $...$
     text = re.sub(r'\$([^$]+)\$', fix_in_formula, text)
-    
+
     # 修复块级公式 $$...$$
     def fix_in_display_formula(match):
         formula_content = match.group(1)
         # 修复 \in[A-Z] 模式
         formula_content = re.sub(r'\\in([A-Z])', fix_in_symbol, formula_content)
         return f"$${formula_content}$$"
-    
+
     text = re.sub(r'\$\$([^$]+)\$\$', fix_in_display_formula, text)
-    
+
     return text
 
 def format_chart2table_func(block):
@@ -927,19 +933,19 @@ class PaddleOCRVLResult(dict):
     def save_to_img(self, save_path, *args, **kwargs):
         """
         Save the image representation of the result to files.
-        
+
         Args:
-            save_path: The path to save the image(s). If the save path does not end with .jpg or .png, 
+            save_path: The path to save the image(s). If the save path does not end with .jpg or .png,
                       it appends the input path's stem and suffix to the save path.
             *args: Additional positional arguments that will be passed to the image writer.
             **kwargs: Additional keyword arguments that will be passed to the image writer.
         """
         import mimetypes
-        
+
         def _is_image_file(file_path):
             mime_type, _ = mimetypes.guess_type(str(file_path))
             return mime_type is not None and mime_type.startswith("image/")
-        
+
         img_dict = self._to_img()
         if not _is_image_file(save_path):
             fn = Path(self._get_input_fn())
@@ -966,7 +972,7 @@ class PaddleOCRVLResult(dict):
     def save_to_markdown(self, save_path, pretty=True, show_formula_number=False, *args, **kwargs):
         """
         Save the markdown representation of the result to a file.
-        
+
         Args:
             save_path: 保存路径（目录或文件路径）
             pretty: 是否使用 HTML 美化 markdown
@@ -983,10 +989,10 @@ class PaddleOCRVLResult(dict):
             import mimetypes
             mime_type, _ = mimetypes.guess_type(str(file_path))
             return mime_type == "text/markdown"
-        
+
         import os
         import mimetypes
-        
+
         if not _is_markdown_file(save_path):
             fn = Path(self._get_input_fn())
             suffix = fn.suffix if _is_markdown_file(fn) else ".md"
@@ -996,7 +1002,7 @@ class PaddleOCRVLResult(dict):
             self.save_path = save_path
         else:
             self.save_path = save_path
-        
+
         self._save_data(
             self._save_markdown_text,
             self._save_image,
@@ -1005,7 +1011,7 @@ class PaddleOCRVLResult(dict):
             *args,
             **kwargs,
         )
-    
+
     def _save_data(
         self,
         save_mkd_func,
@@ -1016,7 +1022,7 @@ class PaddleOCRVLResult(dict):
         **kwargs,
     ):
         """Internal method to save markdown and image data.
-        
+
         Args:
             save_mkd_func: Function to save markdown text.
             save_img_func: Function to save image data.
@@ -1041,13 +1047,13 @@ class PaddleOCRVLResult(dict):
                         *args,
                         **kwargs,
                     )
-    
+
     def _save_markdown_text(self, out_path, text, *args, **kwargs):
         """Save markdown text to file."""
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, 'w', encoding='utf-8') as f:
             f.write(text)
-    
+
     def _save_image(self, out_path, img_data, *args, **kwargs):
         """Save image data to file."""
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1085,7 +1091,7 @@ class PaddleOCRVL:
     OpenVINO 版本的 PaddleOCR-VL Pipeline
     使用 OpenVINO 进行布局检测和 VLM 推理
     """
-    
+
     # ModelScope 模型 ID（对齐 PaddleOCR-VL-1.5-ov 仓库结构）
     # - layout:  https://www.modelscope.cn/models/zhaohb/PaddleOCR-VL-1.5-ov/tree/master/PP-DoclayoutV3-ov
     # - vlm:     https://www.modelscope.cn/models/zhaohb/PaddleOCR-VL-1.5-ov/tree/master/PaddleOCR-VL-1.5-ov
@@ -1094,7 +1100,7 @@ class PaddleOCRVL:
     VLM_SUBDIR = "PaddleOCR-VL-1.5-ov"
     # DocLayoutV3-ov 当前目录仅提供一个 .xml（不再区分 precision）
     LAYOUT_XML_FILENAME = "DocLayoutV3.xml"
-    
+
     def __init__(
         self,
         layout_model_path: Optional[str] = None,
@@ -1116,7 +1122,7 @@ class PaddleOCRVL:
     ):
         """
         初始化 PaddleOCR-VL Pipeline
-        
+
         Args:
             layout_model_path: 布局检测模型路径（OpenVINO IR .xml 文件），如果为 None 则自动下载
             vlm_model_path: VLM 模型路径（包含 vision.xml, vision_mlp.xml, llm_stateful.xml 等的目录），如果为 None 则自动下载
@@ -1148,10 +1154,10 @@ class PaddleOCRVL:
         ]
         self.cache_dir = cache_dir
         self.layout_precision = layout_precision
-        
+
         # NOTE: DocLayoutV3-ov 当前仅提供单一 xml，不再根据 layout_precision 选择文件。
         # 保留该参数仅用于兼容旧调用，不做校验/分支选择。
-        
+
         # 自动下载或验证模型路径
         if layout_model_path is None:
             if not MODELSCOPE_AVAILABLE:
@@ -1160,7 +1166,7 @@ class PaddleOCRVL:
             layout_model_path = self._download_layout_model()
         else:
             layout_model_path = self._ensure_layout_model(layout_model_path)
-        
+
         if vlm_model_path is None:
             if not MODELSCOPE_AVAILABLE:
                 raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
@@ -1168,33 +1174,33 @@ class PaddleOCRVL:
             vlm_model_path = self._download_vlm_model()
         else:
             vlm_model_path = self._ensure_vlm_model(vlm_model_path)
-        
+
         self.layout_model_path = layout_model_path
         self.vlm_model_path = vlm_model_path
-        
+
         # 初始化 OpenVINO Core
         self.core = ov.Core()
-        
+
         # 加载布局检测模型
         if self.use_layout_detection:
             self._load_layout_model()
-        
+
         # 加载 VLM 模型
         self._load_vlm_model(llm_int4_compress=llm_int4_compress, vision_int8_quant=vision_int8_quant, llm_int8_compress=llm_int8_compress, llm_int8_quant=llm_int8_quant)
-        
+
         # 不需要单独初始化图像处理器，VLM 模型内部会处理
-    
+
     def _download_layout_model(self) -> str:
         """下载布局检测模型"""
         if not MODELSCOPE_AVAILABLE:
             raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
-        
+
         print(f"正在从 ModelScope 下载布局检测模型: {self.MODELSCOPE_REPO_ID}/{self.LAYOUT_SUBDIR}")
         repo_dir = Path(snapshot_download(self.MODELSCOPE_REPO_ID, cache_dir=self.cache_dir))
         model_dir = repo_dir / self.LAYOUT_SUBDIR
         if not model_dir.exists():
             raise FileNotFoundError(f"未找到布局检测子目录: {model_dir}")
-        
+
         # DocLayoutV3-ov：优先使用固定文件名；若不存在则回退到目录中唯一/第一个 xml
         model_path = model_dir / self.LAYOUT_XML_FILENAME
         if not model_path.exists():
@@ -1204,26 +1210,26 @@ class PaddleOCRVL:
             if len(xml_files) > 1:
                 print(f"⚠️  发现多个布局检测 xml，将使用第一个：{xml_files[0].name}")
             model_path = xml_files[0]
-        
+
         # 检查对应的 .bin 文件是否存在
         bin_path = model_path.with_suffix(".bin")
         if not bin_path.exists():
             raise FileNotFoundError(f"对应的 .bin 文件不存在: {bin_path}")
-        
+
         print(f"✅ 布局检测模型已下载到: {model_path}")
         return str(model_path)
-    
+
     def _download_vlm_model(self) -> str:
         """下载 VLM 模型"""
         if not MODELSCOPE_AVAILABLE:
             raise ImportError("modelscope is required for auto-download. Install with: pip install modelscope")
-        
+
         print(f"正在从 ModelScope 下载 VLM 模型: {self.MODELSCOPE_REPO_ID}/{self.VLM_SUBDIR}")
         repo_dir = Path(snapshot_download(self.MODELSCOPE_REPO_ID, cache_dir=self.cache_dir))
         model_dir = repo_dir / self.VLM_SUBDIR
         if not model_dir.exists():
             raise FileNotFoundError(f"未找到 VLM 子目录: {model_dir}")
-        
+
         # 验证必要的文件是否存在
         required_files = ["vision.xml", "llm_stateful.xml", "llm_embd.xml"]
         model_path = Path(model_dir)
@@ -1231,20 +1237,20 @@ class PaddleOCRVL:
         for file_name in required_files:
             if not (model_path / file_name).exists():
                 missing_files.append(file_name)
-        
+
         if missing_files:
             raise FileNotFoundError(
                 f"在下载的模型目录中缺少必要的文件: {missing_files}\n"
                 f"模型目录: {model_dir}"
             )
-        
+
         print(f"✅ VLM 模型已下载到: {model_dir}")
         return str(model_dir)
-    
+
     def _ensure_layout_model(self, model_path: str) -> str:
         """确保布局检测模型存在，如果不存在则下载"""
         model_path_obj = Path(model_path)
-        
+
         # 如果是目录，根据 precision 查找对应的 .xml 文件
         if model_path_obj.is_dir():
             # DocLayoutV3-ov：目录下通常只有一个 xml，优先使用固定文件名，否则取第一个 xml
@@ -1252,24 +1258,24 @@ class PaddleOCRVL:
             if not xml_file.exists():
                 xml_files = list(model_path_obj.glob("*.xml"))
                 xml_file = xml_files[0] if xml_files else None
-            
+
             if xml_file is None or not Path(xml_file).exists():
                 print(f"⚠️  在指定目录中未找到匹配的 .xml 文件，尝试自动下载: {model_path}")
                 return self._download_layout_model()
-            
+
             # 检查对应的 .bin 文件是否存在
             bin_path = Path(xml_file).with_suffix(".bin")
             if not bin_path.exists():
                 print(f"⚠️  对应的 .bin 文件不存在: {bin_path}，尝试自动下载")
                 return self._download_layout_model()
-            
+
             return str(xml_file)
-        
+
         # 如果是文件路径，检查文件是否存在
         if not model_path_obj.exists():
             print(f"⚠️  模型文件不存在，尝试自动下载: {model_path}")
             return self._download_layout_model()
-        
+
         # 如果指定了具体的 .xml 文件路径，直接使用（忽略 precision 参数）
         if model_path_obj.suffix.lower() == ".xml":
             bin_path = model_path_obj.with_suffix(".bin")
@@ -1277,56 +1283,56 @@ class PaddleOCRVL:
                 print(f"⚠️  对应的 .bin 文件不存在: {bin_path}，尝试自动下载")
                 return self._download_layout_model()
             return model_path
-        
+
         return model_path
-    
+
     def _ensure_vlm_model(self, model_path: str) -> str:
         """确保 VLM 模型存在，如果不存在则下载"""
         model_path_obj = Path(model_path)
-        
+
         if not model_path_obj.exists():
             print(f"⚠️  模型目录不存在，尝试自动下载: {model_path}")
             return self._download_vlm_model()
-        
+
         # 验证必要的文件是否存在
         required_files = ["vision.xml", "llm_stateful.xml", "llm_embd.xml"]
         missing_files = []
         for file_name in required_files:
             if not (model_path_obj / file_name).exists():
                 missing_files.append(file_name)
-        
+
         if missing_files:
             print(f"⚠️  模型目录中缺少必要的文件 {missing_files}，尝试自动下载")
             return self._download_vlm_model()
-        
+
         return model_path
-    
+
     def _load_layout_model(self):
         """加载布局检测模型"""
         model = self.core.read_model(self.layout_model_path)
-        
+
         # 添加预处理
         prep = ov.preprocess.PrePostProcessor(model)
         prep.input("image").tensor().set_layout(ov.Layout("NCHW"))
         prep.input("image").preprocess().scale([255, 255, 255])
         model = prep.build()
-        
+
         # 编译模型（使用 layout_device）
         self.layout_compiled_model = self.core.compile_model(model, self.layout_device)
         self.layout_request = self.layout_compiled_model.create_infer_request()
-    
+
     def _load_vlm_model(self, llm_int4_compress=False, vision_int8_quant=True, llm_int8_compress=True, llm_int8_quant=True):
         """加载 VLM 模型"""
         self.vlm_model = OVPaddleOCRVLForCausalLM(
             core=self.core,
             ov_model_path=self.vlm_model_path,
             device=self.vlm_device,
-            llm_int4_compress=llm_int4_compress, 
-            vision_int8_quant=vision_int8_quant, 
-            llm_int8_compress=llm_int8_compress, 
-            llm_int8_quant=llm_int8_quant, 
+            llm_int4_compress=llm_int4_compress,
+            vision_int8_quant=vision_int8_quant,
+            llm_int8_compress=llm_int8_compress,
+            llm_int8_quant=llm_int8_quant,
         )
-    
+
     def predict(
         self,
         input: Union[str, List[str], np.ndarray, List[np.ndarray]],
@@ -1341,11 +1347,12 @@ class PaddleOCRVL:
         layout_shape_mode: Optional[str] = "auto",
         max_new_tokens: Optional[int] = None,
         prompt_label: str = "ocr",
+        vlm_batch_size: int = 4,
         **kwargs,
     ):
         """
         预测文档解析结果
-        
+
         Args:
             input: 输入图像路径、图像路径列表、numpy 数组或 numpy 数组列表
             use_layout_detection: 是否使用布局检测（覆盖初始化设置）
@@ -1355,7 +1362,7 @@ class PaddleOCRVL:
             layout_merge_bboxes_mode: 布局框合并模式
             max_new_tokens: 最大生成 token 数
             **kwargs: 其他参数
-        
+
         Yields:
             PaddleOCRVLResult: 解析结果对象
         """
@@ -1385,7 +1392,7 @@ class PaddleOCRVL:
                 use_seal_recognition = True
             elif prompt_label.lower() == "chart":
                 use_chart_recognition = True
-        
+
         # 处理输入
         if isinstance(input, str):
             inputs = [input]
@@ -1395,7 +1402,7 @@ class PaddleOCRVL:
             inputs = input
         else:
             raise ValueError(f"Unsupported input type: {type(input)}")
-        
+
         # 处理每个输入
         for idx, inp in enumerate(inputs):
             # 读取图像
@@ -1407,11 +1414,12 @@ class PaddleOCRVL:
                 input_path = None
             else:
                 raise ValueError(f"Unsupported input item type: {type(inp)}")
-            
+
             if image is None:
                 raise ValueError(f"Failed to load image: {inp}")
-            
+
             # 执行 CV 处理（布局检测）
+            _t_cv_start = time.time()
             results_cv = self._process_cv(
                 image,
                 input_path,
@@ -1423,8 +1431,13 @@ class PaddleOCRVL:
                 layout_shape_mode=layout_shape_mode,
                 prompt_label=prompt_label,
             )
-            
+            _t_cv = time.time() - _t_cv_start
+            n_layout_blocks = len(results_cv.get("layout_det_results", [{}])[0].get("boxes", [])) if results_cv.get("layout_det_results") else 0
+            if _PIPELINE_VERBOSE:
+                print(f"[Pipeline] 布局检测完成: {_t_cv:.3f}s, 检测到 {n_layout_blocks} 个块")
+
             # 执行 VLM 处理（布局解析）
+            _t_vlm_start = time.time()
             result = self._process_vlm(
                 results_cv,
                 max_new_tokens=max_new_tokens,
@@ -1432,10 +1445,14 @@ class PaddleOCRVL:
                 use_seal_recognition=use_seal_recognition,
                 use_ocr_for_image_block=use_ocr_for_image_block,
                 layout_shape_mode=layout_shape_mode,
+                vlm_batch_size=vlm_batch_size,
             )
-            
+            _t_vlm = time.time() - _t_vlm_start
+            if _PIPELINE_VERBOSE:
+                print(f"[Pipeline] VLM推理完成: {_t_vlm:.3f}s, 总计: {_t_cv + _t_vlm:.3f}s (布局={_t_cv:.3f}s + VLM={_t_vlm:.3f}s)")
+
             yield result
-    
+
     def _process_cv(
         self,
         image: np.ndarray,
@@ -1452,7 +1469,7 @@ class PaddleOCRVL:
         """
         处理计算机视觉部分（布局检测）
         参考 PaddleX 的实现，确保功能一致
-        
+
         Args:
             image: 输入图像（BGR 格式）
             input_path: 输入路径
@@ -1463,7 +1480,7 @@ class PaddleOCRVL:
             layout_unclip_ratio: 坐标扩展比例
             layout_merge_bboxes_mode: 布局框合并模式
             prompt_label: 不使用布局检测时的默认标签（默认 "ocr"）
-        
+
         Returns:
             dict: 包含布局检测结果的字典，格式与 PaddleX 一致
         """
@@ -1471,7 +1488,7 @@ class PaddleOCRVL:
         # 如果后续需要文档预处理（如方向校正、去弯曲等），可以在这里添加
         doc_preprocessor_image = image.copy()
         doc_preprocessor_res = {"output_img": doc_preprocessor_image}
-        
+
         # 布局检测
         if use_layout_detection and self.use_layout_detection:
             # 执行布局检测
@@ -1486,7 +1503,7 @@ class PaddleOCRVL:
 
             # 提取文档中的图像（参考 PaddleX 的 gather_imgs）
             imgs_in_doc = gather_imgs(doc_preprocessor_image, layout_det_res["boxes"])
-            
+
             # 设置 input_path 和 page_index
             layout_det_res["input_path"] = input_path
             layout_det_res["page_index"] = page_index
@@ -1507,7 +1524,7 @@ class PaddleOCRVL:
             }
             # 不使用布局检测时，不提取图像
             imgs_in_doc = []
-        
+
         # 创建 LayoutDetectionResult 对象并获取 json 和 img
         import os
         layout_det_result_obj = LayoutDetectionResult(
@@ -1516,7 +1533,7 @@ class PaddleOCRVL:
             page_index=page_index,
             input_img=doc_preprocessor_image
         )
-        
+
         # 将 layout 可视化结果图保存到 output 目录（用户需求）。
         # 同时保留环境变量覆盖：PADDLEOCR_VL_DEBUG_SAVE_DIR=/path/to/dir
         try:
@@ -1532,7 +1549,7 @@ class PaddleOCRVL:
             layout_det_result_obj.save_to_img(save_path=out_file.as_posix())
         except Exception:
             pass
-        
+
         return {
             "input_path": input_path,
             "page_index": page_index,
@@ -1542,7 +1559,7 @@ class PaddleOCRVL:
             "layout_det_results": [layout_det_res],
             "imgs_in_doc": [imgs_in_doc],
         }
-    
+
     def _layout_detection(
         self,
         image: np.ndarray,
@@ -1554,26 +1571,26 @@ class PaddleOCRVL:
     ):
         """
         执行布局检测
-        
+
         Args:
             image: 输入图像（BGR 格式）
             threshold: 检测阈值
             layout_nms: 是否使用 NMS
             layout_unclip_ratio: 坐标扩展比例
             layout_merge_bboxes_mode: 布局框合并模式
-        
+
         Returns:
             dict: 布局检测结果
         """
         orig_h, orig_w = image.shape[:2]
-        
+
         # 预处理
         input_blob, scale_h, scale_w = preprocess_image_doclayout(image)
-        
+
         # 准备输入
         input_tensors = self.layout_compiled_model.inputs
         input_data = {}
-        
+
         # breakpoint()
         for inp in input_tensors:
             inp_name = inp.get_any_name()
@@ -1583,21 +1600,21 @@ class PaddleOCRVL:
                 input_data[inp_name] = input_blob
             elif inp_name == "scale_factor":
                 input_data[inp_name] = np.array([[scale_h, scale_w]], dtype=np.float32)
-        
+
         # 如果输入名称不匹配，按顺序分配
         if len(input_data) != len(input_tensors):
             input_data = {}
             input_data[input_tensors[0].get_any_name()] = np.array([800, 800], dtype=np.float32)[np.newaxis, ...]
             input_data[input_tensors[1].get_any_name()] = input_blob
             input_data[input_tensors[2].get_any_name()] = np.array([[scale_h, scale_w]], dtype=np.float32)
-        
+
         # 创建 OpenVINO Tensor 对象
         input_tensors_ov = {}
         for inp in input_tensors:
             inp_name = inp.get_any_name()
             data = input_data[inp_name]
             input_tensors_ov[inp_name] = ov.Tensor(data)
-        
+
         # 执行推理
         infer_result = self.layout_compiled_model(input_tensors_ov)
         output_tensors = self.layout_compiled_model.outputs
@@ -1607,11 +1624,11 @@ class PaddleOCRVL:
             output_tensor = infer_result[out]
             output_data = output_tensor.data
             output.append(output_data)
-        
+
         # Post-processing
         if layout_unclip_ratio is None:
             layout_unclip_ratio = [1.0, 1.0]
-        
+
         # Choose postprocess based on output shapes.
         out0 = np.array(output[0]) if len(output) > 0 else None
         out1 = np.array(output[1]) if len(output) > 1 else None
@@ -1640,7 +1657,7 @@ class PaddleOCRVL:
                 layout_merge_bboxes_mode=layout_merge_bboxes_mode,
                 layout_shape_mode=layout_shape_mode,
             )
-        
+
         result_obj = LayoutAnalysisResult(
             {
                 "input_path": None,
@@ -1649,9 +1666,9 @@ class PaddleOCRVL:
                 "boxes": results,
             }
         )
-        
+
         return result_obj
-    
+
     def _get_label_name(self, cls_id: int) -> str:
         """获取标签名称"""
         label_list = [
@@ -1663,7 +1680,7 @@ class PaddleOCRVL:
         if 0 <= cls_id < len(label_list):
             return label_list[cls_id]
         return "unknown"
-    
+
     def _process_vlm(
         self,
         results_cv: dict,
@@ -1672,14 +1689,15 @@ class PaddleOCRVL:
         use_seal_recognition: Optional[bool] = None,
         use_ocr_for_image_block: Optional[bool] = None,
         layout_shape_mode: str = "auto",
+        vlm_batch_size: int = 4,
     ):
         """
         处理视觉语言模型部分（布局解析）
-        
+
         Args:
             results_cv: CV 处理结果
             max_new_tokens: 最大生成 token 数
-        
+
         Returns:
             PaddleOCRVLResult: 解析结果对象
         """
@@ -1700,7 +1718,7 @@ class PaddleOCRVL:
             results_cv["layout_det_results"],
             results_cv["imgs_in_doc"],
         )
-        
+
         # 获取布局解析结果
         parsing_res_lists, table_res_lists, spotting_res_lists, imgs_in_doc = self.get_layout_parsing_results(
             [doc_preprocessor_image],
@@ -1711,8 +1729,9 @@ class PaddleOCRVL:
             use_seal_recognition=bool(use_seal_recognition) if use_seal_recognition is not None else self.use_seal_recognition,
             use_ocr_for_image_block=bool(use_ocr_for_image_block) if use_ocr_for_image_block is not None else self.use_ocr_for_image_block,
             layout_shape_mode=layout_shape_mode,
+            vlm_batch_size=vlm_batch_size,
         )
-        
+
         # 组装结果
         parsing_res_list = parsing_res_lists[0] if parsing_res_lists else []
         table_res_list = table_res_lists[0] if table_res_lists else []
@@ -1720,7 +1739,7 @@ class PaddleOCRVL:
         # Align with PaddleX doc_vl pipeline:
         # PaddleX does NOT reorder parsing_res_list here; it relies on layout_det_res["boxes"]
         # being already in the desired reading order.
-        
+
         single_img_res = {
             "input_path": input_path,
             "page_index": page_index,
@@ -1746,9 +1765,9 @@ class PaddleOCRVL:
                 "return_layout_polygon_points": False if layout_shape_mode == "rect" else True,
             },
         }
-        
+
         return PaddleOCRVLResult(single_img_res)
-    
+
     def get_layout_parsing_results(
         self,
         images: List[np.ndarray],
@@ -1759,16 +1778,17 @@ class PaddleOCRVL:
         use_seal_recognition: bool = False,
         use_ocr_for_image_block: bool = False,
         layout_shape_mode: str = "auto",
+        vlm_batch_size: int = 4,
     ):
         """
         获取布局解析结果（参考 PaddleX 的实现，确保逻辑一致）
-        
+
         Args:
             images: 图像列表
             layout_det_results: 布局检测结果列表
             imgs_in_doc: 文档中的图像列表
             max_new_tokens: 最大生成 token 数
-        
+
         Returns:
             tuple: (parsing_res_lists, table_res_lists, spotting_res_list, imgs_in_doc)
         """
@@ -1796,7 +1816,7 @@ class PaddleOCRVL:
         # 对齐 PaddleX：seal 分支由入参决定（predict 里 None->self 默认）
         if not use_seal_recognition:
             image_labels += ["seal"]
-        
+
         blocks = []
         for i, (image, layout_det_res, imgs_in_doc_for_img) in enumerate(zip(images, layout_det_results, imgs_in_doc)):
             layout_det_res = filter_overlap_boxes(layout_det_res, layout_shape_mode=layout_shape_mode)
@@ -1804,7 +1824,7 @@ class PaddleOCRVL:
             # 对齐 PaddleX：不在 parsing 阶段额外重排 boxes。
             # PaddleX 直接使用 layout_det_res["boxes"] 的原始顺序（仅做 filter_overlap_boxes），
             # 后续 crop/merge 都依赖该顺序，从而保证 parsing_res_list 的块顺序一致。
-            
+
             # 裁剪图像区域
             blocks_for_img = self._crop_by_boxes(image, boxes, layout_shape_mode=layout_shape_mode)
 
@@ -1835,7 +1855,7 @@ class PaddleOCRVL:
             # except Exception:
             #     # 保存失败不影响主流程
             #     pass
-            
+
             # 合并布局块（如果需要）
             if self.merge_layout_blocks:
                 blocks_for_img = merge_blocks(
@@ -1843,21 +1863,21 @@ class PaddleOCRVL:
                     non_merge_labels=image_labels + ["table"],
                     layout_shape_mode=layout_shape_mode,
                 )
-            
+
             blocks.append(blocks_for_img)
-            
+
             # 准备 VLM 输入（参考 PaddleX doc_vl）
             for j, block in enumerate(blocks_for_img):
                 block_img = block["img"]
                 block_label = block["label"]
-                
+
                 if block_label not in image_labels and block_img is not None:
                     figure_token_map = {}
                     text_prompt = "OCR:"
                     min_pixels = default_min_pixels
                     max_pixels = default_max_pixels
                     drop_figures = []
-                    
+
                     if block_label == "table":
                         text_prompt = "Table Recognition:"
                         block_img, figure_token_map, drop_figures = tokenize_figure_of_table(
@@ -1885,14 +1905,19 @@ class PaddleOCRVL:
                             "queries": [],
                             "figure_token_maps": [],
                             "vlm_block_ids": [],
+                            "block_infos": [],
                             "curr_vlm_block_idx": 0,
                         }
                     batch_dict_by_pixel[pixel_key]["images"].append(block_img)
                     batch_dict_by_pixel[pixel_key]["queries"].append(text_prompt)
                     batch_dict_by_pixel[pixel_key]["figure_token_maps"].append(figure_token_map)
                     batch_dict_by_pixel[pixel_key]["vlm_block_ids"].append((i, j))
+                    batch_dict_by_pixel[pixel_key]["block_infos"].append({
+                        "label": block_label,
+                        "bbox": block["box"],
+                    })
                     id2pixel_key_map[(i, j)] = pixel_key
-                    
+
                     drop_figures_set.update(drop_figures)  # 参考 PaddleX 第 277 行
 
         # VLM 推理：按 (min_pixels, max_pixels) 分桶（对齐 PaddleX doc_vl）
@@ -1900,8 +1925,9 @@ class PaddleOCRVL:
             min_pixels, max_pixels = pixel_key
             images_bucket = batch_dict_by_pixel[pixel_key]["images"]
             queries_bucket = batch_dict_by_pixel[pixel_key]["queries"]
+            block_infos_bucket = batch_dict_by_pixel[pixel_key]["block_infos"]
             # Spotting 分支不强制覆盖 min/max_pixels（与 PaddleX 行为一致）
-            vlm_kwargs = {"max_new_tokens": max_new_tokens}
+            vlm_kwargs = {"max_new_tokens": max_new_tokens, "vlm_batch_size": vlm_batch_size}
             if not has_spotting:
                 vlm_kwargs["min_pixels"] = min_pixels
                 vlm_kwargs["max_pixels"] = max_pixels
@@ -1909,21 +1935,22 @@ class PaddleOCRVL:
             batch_results = self._vlm_predict(
                 images_bucket,
                 queries_bucket,
+                block_infos=block_infos_bucket,
                 **vlm_kwargs,
             )
             batch_dict_by_pixel[pixel_key]["vlm_results"] = batch_results
-        
+
         # 组装解析结果
         parsing_res_lists = []
         table_res_lists = []
         spotting_res_list = []
         table_blocks = []
-        
+
         for i, blocks_for_img in enumerate(blocks):
             parsing_res_list = []
             table_res_list = []
             spotting_res = {}
-            
+
             for j, block in enumerate(blocks_for_img):
                 block_img = block["img"]
                 block_bbox = block["box"]
@@ -1946,11 +1973,11 @@ class PaddleOCRVL:
                     result_str = vl_rec_result.get("result", "")
                     if result_str is None:
                         result_str = ""
-                    
+
                     # 处理重复内容（对齐 PaddleX doc_vl：table=5000 else 50）
                     min_count = 5000 if block_label == "table" else 50
                     result_str = truncate_repetitive_content(result_str, min_count=min_count)
-                    
+
                     # 处理公式格式（参考 PaddleX 第 338-350 行）
                     if ("\\(" in result_str and "\\)" in result_str) or (
                         "\\[" in result_str and "\\]" in result_str
@@ -1966,10 +1993,10 @@ class PaddleOCRVL:
                         )
                         if block_label == "formula_number":
                             result_str = result_str.replace("$", "")
-                    
+
                     # 修复 LaTeX 语法错误（修复 \inS, \inR 等常见错误）
                     result_str = fix_latex_syntax(result_str)
-                    
+
                     # 处理表格（参考 PaddleX 第 351-357 行）
                     if block_label == "table":
                         html_str = convert_otsl_to_html(result_str)
@@ -1979,9 +2006,9 @@ class PaddleOCRVL:
                     if block_label == "spotting":
                         h_, w_ = block_img.shape[:2]
                         result_str, spotting_res = post_process_for_spotting(result_str, w_, h_)
-                    
+
                     block_content = result_str
-                
+
                 block_info = PaddleOCRVLBlock(
                     label=block_label,
                     bbox=block_bbox,
@@ -1989,7 +2016,7 @@ class PaddleOCRVL:
                     group_id=block.get("group_id", None),
                     polygon_points=block.get("polygon_points", None),
                 )
-                
+
                 # 设置图片信息（对齐 PaddleX doc_vl：构造 image_path_to_obj_map + drop_figures_set）
                 # 当 block_label 在 image_labels 中且 block_img 不为 None 时，设置 block_info.image
                 if block_label in vis_image_labels and block_img is not None:
@@ -2013,11 +2040,11 @@ class PaddleOCRVL:
                     else:
                         # 如果图片在 drop_figures_set 中，跳过这个 block（参考 PaddleX 第 379 行）
                         continue
-                
+
                 parsing_res_list.append(block_info)
                 if block_label == "table":
                     table_blocks.append({"figure_token_map": figure_token_map, "block": block_info})
-            
+
             # 对齐 PaddleX：table 内容里回填图片 token（需要 image_path_to_obj_map）
             for blk_info in table_blocks:
                 blk = blk_info["block"]
@@ -2027,7 +2054,7 @@ class PaddleOCRVL:
             parsing_res_lists.append(parsing_res_list)
             table_res_lists.append(table_res_list)
             spotting_res_list.append(spotting_res)
-        
+
         # 对齐 PaddleX（见提交：support save block_id/block_order、concatenate_pages/restructure_pages）：
         # 为每个 block 分配全局 id，且当 group_id 为空时使用 global_block_id 作为默认 group_id。
         global_block_id = 0
@@ -2232,7 +2259,7 @@ class PaddleOCRVL:
                     block.global_group_id = all_blocks[block.global_group_id].global_group_id
 
         return pages
-    
+
     def _vlm_predict(
         self,
         block_imgs: List[np.ndarray],
@@ -2240,22 +2267,19 @@ class PaddleOCRVL:
         max_new_tokens: int = 4096,
         min_pixels: Optional[int] = None,
         max_pixels: Optional[int] = None,
+        block_infos: Optional[List[dict]] = None,
         **kwargs,
     ):
         """
-        使用 VLM 模型进行预测（参考 torch_ov_test.py 的 OpenVINO 推理方式）
-        
-        Args:
-            block_imgs: 图像块列表
-            text_prompts: 文本提示列表
-            max_new_tokens: 最大生成 token 数
-        
-        Returns:
-            list: VLM 预测结果列表
+        使用 VLM 模型进行预测。
+        两阶段流水线：
+          Phase 1: 批量预处理（图像处理 + vision 编码 + text embedding）
+          Phase 2: 批量 LLM 自回归生成（batch_generate），否则顺序生成
         """
-        results = []
-        
-        # 准备 generation_config
+        import time
+
+        n_blocks = len(block_imgs)
+
         generation_config = {
             "bos_token_id": self.vlm_model.tokenizer.bos_token_id,
             "eos_token_id": self.vlm_model.tokenizer.eos_token_id,
@@ -2264,28 +2288,35 @@ class PaddleOCRVL:
             "do_sample": False,
         }
 
-        for idx, (block_img, text_prompt) in enumerate(zip(block_imgs, text_prompts)):
-            # 转换图像格式
+        # Phase 1: 批量预处理（图像处理 + vision 编码 + text embedding）
+        _t_phase1_start = time.time()
+        prepared_list = []
+
+        # Step 1a: 转换所有图像为 PIL
+        pil_images = []
+        for block_img in block_imgs:
             if isinstance(block_img, np.ndarray):
                 if len(block_img.shape) == 2:
                     block_img = cv2.cvtColor(block_img, cv2.COLOR_GRAY2RGB)
                 elif block_img.shape[2] == 3:
                     block_img = cv2.cvtColor(block_img, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(block_img)
+                pil_images.append(Image.fromarray(block_img))
             else:
-                pil_image = block_img
-            
-            # # 保存 pil_image 为图片
-            # import os
-            # output_dir = "output"
-            # os.makedirs(output_dir, exist_ok=True)
-            # save_path = os.path.join(output_dir, f"pil_image_{idx}.png")
-            # pil_image.save(save_path)
-            # print(f"Saved pil_image to: {save_path}")
-            # # breakpoint()
-            # pil_image = pil_image.resize((1200, 800), Image.Resampling.LANCZOS)
-            
-            # 准备输入消息（与 torch_ov_test.py 一致）
+                pil_images.append(block_img)
+
+        # Step 1b: 一次性 batch vision encoding
+        _t_vision_start = time.time()
+        try:
+            vision_results = self.vlm_model.batch_encode_images(pil_images)
+        except Exception as e:
+            print(f"Warning: batch_encode_images failed: {e}, falling back to per-block encoding")
+            vision_results = None
+        _t_vision = time.time() - _t_vision_start
+
+        # Step 1c: 逐块完成 text embedding + position 计算
+        for idx, (pil_image, text_prompt) in enumerate(zip(pil_images, text_prompts)):
+            _t_prep_start = time.time()
+
             messages = [
                 {
                     "role": "user",
@@ -2295,50 +2326,147 @@ class PaddleOCRVL:
                     ]
                 }
             ]
-            
+
             try:
-                # 使用 chat 方法进行推理（与 torch_ov_test.py 一致）
-                response, history = self.vlm_model.chat(
-                    messages=messages,
-                    generation_config=generation_config
-                )
-                result_str = response
+                if vision_results is not None:
+                    img_embeds, img_grid_thw = vision_results[idx]
+                    prepared = self.vlm_model.prepare_inputs_from_embeds(
+                        messages, img_embeds, img_grid_thw,
+                    )
+                else:
+                    prepared = self.vlm_model.prepare_inputs(messages)
             except Exception as e:
-                # 如果 VLM 推理失败，返回空字符串
-                print(f"Warning: VLM inference failed: {e}")
-                result_str = ""
-            
-            # print("result_str: ", result_str)
-            results.append({"result": result_str})
-        
+                print(f"Warning: prepare_inputs failed for block {idx}: {e}")
+                prepared = None
+
+            _t_prep = time.time() - _t_prep_start
+            input_tokens = prepared["inputs_embeds"].shape[1] if prepared is not None else 0
+            block_info = block_infos[idx] if block_infos and idx < len(block_infos) else {}
+            prepared_list.append({
+                "prepared": prepared,
+                "pil_image": pil_image,
+                "block_info": block_info,
+                "prep_time": _t_prep,
+                "input_tokens": input_tokens,
+            })
+
+        _t_phase1 = time.time() - _t_phase1_start
+        if _BATCH_VERBOSE:
+            print(f"    [VLM] Phase1 批量预处理 {n_blocks} 个块: {_t_phase1:.3f}s (vision编码={_t_vision:.3f}s, 文本+位置={_t_phase1 - _t_vision:.3f}s)")
+
+        # Phase 2: LLM 自回归生成（batch 或 sequential）
+        _t_phase2_start = time.time()
+        results = [None] * n_blocks
+        batch_size = kwargs.get("vlm_batch_size", 4)
+
+        if n_blocks > 1 and batch_size > 1:
+            if _BATCH_VERBOSE:
+                print(f"    [VLM] Phase2 使用动态 batch (bs={batch_size})", flush=True)
+
+            valid_indices = [i for i, item in enumerate(prepared_list) if item["prepared"] is not None]
+            for i in range(n_blocks):
+                if i not in valid_indices:
+                    results[i] = {"result": ""}
+
+            for batch_start in range(0, len(valid_indices), batch_size):
+                batch_indices = valid_indices[batch_start:batch_start + batch_size]
+                batch_prepared = [prepared_list[i]["prepared"] for i in batch_indices]
+
+                try:
+                    _t_gen_start = time.time()
+                    batch_results = self.vlm_model.batch_generate(
+                        batch_prepared,
+                        max_new_tokens=max_new_tokens,
+                        eos_token_id=self.vlm_model.tokenizer.eos_token_id,
+                    )
+                    _t_gen = time.time() - _t_gen_start
+
+                    for j, idx in enumerate(batch_indices):
+                        result_str, token_stats = batch_results[j]
+                        item = prepared_list[idx]
+                        block_info = item["block_info"]
+                        if _BATCH_VERBOSE:
+                            seq_gen_s = (token_stats['first_token_latency_ms'] + token_stats.get('total_decode_ms', 0)) / 1000
+                            print(f"        [VLM] 块{idx+1}/{n_blocks}, label={block_info.get('label','?')}, "
+                                  f"input={item['input_tokens']}tok, output={token_stats['output_tokens']}tok, "
+                                  f"TTFT={token_stats['first_token_latency_ms']:.1f}ms, "
+                                  f"decode={token_stats['decode_avg_ms']:.1f}ms/tok, "
+                                  f"生成={seq_gen_s:.3f}s")
+                        results[idx] = {"result": result_str}
+                except Exception as e:
+                    print(f"Warning: batch_generate failed: {e}, falling back to sequential", flush=True)
+                    import traceback
+                    traceback.print_exc()
+                    for idx in batch_indices:
+                        item = prepared_list[idx]
+                        try:
+                            result_str, _ = self.vlm_model.generate_from_prepared(
+                                item["prepared"], generation_config
+                            )
+                        except Exception:
+                            result_str = ""
+                        results[idx] = {"result": result_str}
+        else:
+            for idx, item in enumerate(prepared_list):
+                prepared = item["prepared"]
+                if prepared is None:
+                    results[idx] = {"result": ""}
+                    continue
+
+                try:
+                    _t_gen_start = time.time()
+                    result_str, token_stats = self.vlm_model.generate_from_prepared(
+                        prepared, generation_config
+                    )
+                    _t_gen = time.time() - _t_gen_start
+                except Exception as e:
+                    print(f"Warning: VLM generate failed for block {idx}: {e}")
+                    result_str = ""
+                    _t_gen = 0
+                    token_stats = {"output_tokens": 0, "first_token_latency_ms": 0.0, "decode_avg_ms": 0.0}
+
+                block_info = item["block_info"]
+                if _BATCH_VERBOSE:
+                    print(f"        [VLM] 块{idx+1}/{n_blocks}, label={block_info.get('label','?')}, "
+                          f"input={item['input_tokens']}tok, output={token_stats['output_tokens']}tok, "
+                          f"TTFT={token_stats['first_token_latency_ms']:.1f}ms, "
+                          f"decode={token_stats['decode_avg_ms']:.1f}ms/tok, "
+                          f"生成={_t_gen:.3f}s")
+                results[idx] = {"result": result_str}
+
+        _t_phase2 = time.time() - _t_phase2_start
+        if _BATCH_VERBOSE:
+            print(f"    [VLM] Phase2 LLM生成 {n_blocks} 个块: {_t_phase2:.3f}s, 平均={_t_phase2/n_blocks:.3f}s/块")
+            print(f"    [VLM] 总计: {_t_phase1 + _t_phase2:.3f}s (预处理={_t_phase1:.3f}s + 生成={_t_phase2:.3f}s)")
+
         return results
-    
+
     def _crop_by_boxes(
         self, image: np.ndarray, boxes: List[dict], layout_shape_mode: str = "auto"
     ) -> List[dict]:
         """
         根据框裁剪图像
-        
+
         Args:
             image: 输入图像
             boxes: 框列表
-        
+
         Returns:
             list: 裁剪后的图像块列表
         """
         blocks = []
         h, w = image.shape[:2]
-        
+
         for box_info in boxes:
             coordinate = box_info["coordinate"]
             xmin, ymin, xmax, ymax = map(int, coordinate)
-            
+
             # 确保坐标在图像范围内
             xmin = max(0, min(xmin, w))
             ymin = max(0, min(ymin, h))
             xmax = max(xmin, min(xmax, w))
             ymax = max(ymin, min(ymax, h))
-            
+
             if xmax > xmin and ymax > ymin:
                 img_crop = image[ymin:ymax, xmin:xmax].copy()
                 out_info = {
@@ -2356,10 +2484,10 @@ class PaddleOCRVL:
                     out_info["polygon_points"] = box_info.get("polygon_points", None)
 
                 blocks.append(out_info)
-        
+
         return blocks
-    
-    
+
+
     def _calculate_projection_overlap_ratio(self, bbox1, bbox2, direction="horizontal"):
         """计算投影重叠比例（参考 PaddleX）"""
         start_index, end_index = (1, 3) if direction == "vertical" else (0, 2)
@@ -2372,7 +2500,7 @@ class PaddleOCRVL:
             bbox1[start_index], bbox2[start_index]
         )
         return overlap / ref_width if ref_width > 0 else 0.0
-    
+
     def _calculate_overlap_ratio(self, bbox1, bbox2, mode="union"):
         """计算重叠比例（参考 PaddleX）"""
         bbox1 = np.array(bbox1)
@@ -2406,19 +2534,19 @@ class PaddleOCRVL:
             return 0.0
 
         return inter_area / ref_area
-    
+
     def _to_pil_image(self, img):
         """转换为 PIL Image"""
         if isinstance(img, Image.Image):
             return img
         return Image.fromarray(img)
-    
+
     def _to_np_array(self, img):
         """转换为 numpy array"""
         if isinstance(img, Image.Image):
             return np.array(img)
         return img
-    
+
     def _calc_merged_wh(self, images):
         """计算合并后的宽高（参考 PaddleX）"""
         widths = [self._to_pil_image(img).width for img in images]
@@ -2426,7 +2554,7 @@ class PaddleOCRVL:
         w = max(widths)
         h = sum(heights)
         return w, h
-    
+
     def _merge_images(self, images, aligns="center"):
         """合并图像（参考 PaddleX）"""
         if not images:
@@ -2456,7 +2584,7 @@ class PaddleOCRVL:
             new_img.paste(img2, (x2, merged.height))
             merged = new_img
         return self._to_np_array(merged)
-    
+
     def close(self):
         """
         关闭模型，尽可能释放 OpenVINO / VLM 相关资源。
