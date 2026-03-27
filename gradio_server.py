@@ -9,9 +9,20 @@ from pathlib import Path
 from paddleocr_vl_openvino.paddleocr_vl_pipeline import PaddleOCRVL
 import tempfile
 import json
+import openvino as ov
 
 # 全局变量存储 pipeline 实例
 pipeline = None
+
+
+def get_available_devices():
+    """通过 OpenVINO Core 查询系统可用的推理设备列表"""
+    core = ov.Core()
+    devices = core.available_devices  # e.g. ['CPU', 'GPU.0', 'GPU.1', 'NPU']
+    # 始终保留 AUTO 选项
+    if "AUTO" not in devices:
+        devices.append("AUTO")
+    return devices
 
 # 在导入后立即设置环境变量，避免Gradio初始化时的网络请求
 os.environ.setdefault("GRADIO_ANALYTICS_ENABLED", "False")
@@ -68,6 +79,7 @@ def process_image(image, use_layout_detection, layout_threshold, max_new_tokens)
             use_layout_detection=use_layout_detection,
             layout_threshold=layout_threshold,
             max_new_tokens=max_new_tokens,
+            vlm_batch_size=30
         )
         
         # 将生成器转换为列表
@@ -155,14 +167,22 @@ def create_gradio_interface():
                     value=""
                 )
             with gr.Row():
+                available_devices = get_available_devices()
+                def _pick_default(devices):
+                    for pref in ["AUTO","GPU","CPU"]:
+                        if pref in devices:
+                            return pref
+                    return devices[0]
+                default_device = _pick_default(available_devices)
+
                 vlm_device = gr.Dropdown(
-                    choices=["CPU", "GPU", "AUTO"],
-                    value="GPU",
+                    choices=available_devices,
+                    value=default_device,
                     label="VLM 推理设备"
                 )
                 layout_device = gr.Dropdown(
-                    choices=["CPU", "GPU", "NPU", "AUTO"],
-                    value="GPU",
+                    choices=available_devices,
+                    value=default_device,
                     label="布局检测推理设备"
                 )
             

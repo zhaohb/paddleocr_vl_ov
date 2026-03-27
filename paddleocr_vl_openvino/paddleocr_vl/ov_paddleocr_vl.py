@@ -13,28 +13,77 @@ from transformers.modeling_outputs import (
 from typing import Optional, Tuple, List, Union
 
 import openvino as ov
-from openvino.runtime import Core, Type
-from openvino.runtime.passes import Manager, MatcherPass, WrapType, Matcher
-from openvino.runtime import opset10 as ops
+from openvino import Core, Type
+from openvino.passes import Manager, MatcherPass, WrapType, Matcher
+from openvino import opset10 as ops
 from openvino.preprocess import PrePostProcessor
 # import nncf
 
 import time
 import warnings
 from transformers.utils.chat_template_utils import render_jinja_template
+
+# 设为 True 可打开 batch 推理的详细日志
+_BATCH_VERBOSE = False
 from .image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 import numpy as np
+
+# 默认聊天模板（PaddleOCR-VL 格式）
+_DEFAULT_CHAT_TEMPLATE = """{%- if not add_generation_prompt is defined -%}
+    {%- set add_generation_prompt = true -%}
+{%- endif -%}
+{%- if not cls_token is defined -%}
+    {%- set cls_token = "<|begin_of_sentence|>" -%}
+{%- endif -%}
+{%- if not eos_token is defined -%}
+    {%- set eos_token = "</s>" -%}
+{%- endif -%}
+{{- cls_token -}}
+{%- for message in messages -%}
+    {%- if message["role"] == "user" -%}
+        {{- "User: " -}}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "image" -%}
+                {{ "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" }}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "text" -%}
+                {{ content["text"] }}
+            {%- endif -%}
+        {%- endfor -%}
+        {{ "\\n" -}}
+    {%- elif message["role"] == "assistant" -%}
+        {{- "Assistant:\\n" -}}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "text" -%}
+                {{ content["text"] }}
+            {%- endif -%}
+        {%- endfor -%}
+        {{ eos_token -}}
+    {%- elif message["role"] == "system" -%}
+        {%- for content in message["content"] -%}
+            {%- if content["type"] == "text" -%}
+                {{ content["text"] + "\\n" }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- "Assistant:\\n" -}}
+{%- endif -%}
+"""
 
 class PaddleOCR_VL_OV:
     def __init__(self, pretrained_model_path=None, model=None, tokenizer=None, ov_model_path='/tmp/paddleocr_vl_ov/', device='CPU', llm_int4_compress=False, llm_int8_compress=False, vision_int8_quant=False):
 
-        if model is None and pretrained_model_path:        
+        if model is None and pretrained_model_path:
             self.model = AutoModelForCausalLM.from_pretrained(
                 pretrained_model_path,
                 trust_remote_code=True
             )
             self.tokenizer = AutoTokenizer.from_pretrained(
-                pretrained_model_path, 
+                pretrained_model_path,
                 trust_remote_code=True
             )
         elif model and tokenizer and pretrained_model_path is None:
@@ -61,16 +110,16 @@ class PaddleOCRVLPreprocessor:
     Preprocessor class for PaddleOCR-VL model.
     Handles message preprocessing, image processing, and tokenization.
     """
-    
+
     def __init__(self, tokenizer):
         """
         Initialize the preprocessor.
-        
+
         Args:
             tokenizer: Tokenizer instance for text tokenization
         """
         self.tokenizer = tokenizer
-    
+
     def preprocess(
         self,
         messages: List[dict],
@@ -80,7 +129,7 @@ class PaddleOCRVLPreprocessor:
     ) -> dict:
         """
         Preprocess messages and images for the model.
-        
+
         Args:
             messages: List of conversation messages. Each message should have the format:
                 [
@@ -107,7 +156,7 @@ class PaddleOCRVLPreprocessor:
                     "temporal_patch_size": 1,
                     "merge_size": 2
                 }
-        
+
         Returns:
             Dictionary containing:
                 - "text_inputs": Tokenized text inputs from tokenizer
@@ -115,51 +164,8 @@ class PaddleOCRVLPreprocessor:
         """
         # Use default chat template if not provided
         if chat_template is None:
-            chat_template = """{%- if not add_generation_prompt is defined -%}
-    {%- set add_generation_prompt = true -%}
-{%- endif -%}
-{%- if not cls_token is defined -%}
-    {%- set cls_token = "<|begin_of_sentence|>" -%}
-{%- endif -%}
-{%- if not eos_token is defined -%}
-    {%- set eos_token = "</s>" -%}
-{%- endif -%}
-{{- cls_token -}}
-{%- for message in messages -%}
-    {%- if message["role"] == "user" -%}
-        {{- "User: " -}}
-        {%- for content in message["content"] -%}
-            {%- if content["type"] == "image" -%}
-                {{ "<|IMAGE_START|><|IMAGE_PLACEHOLDER|><|IMAGE_END|>" }}
-            {%- endif -%}
-        {%- endfor -%}
-        {%- for content in message["content"] -%}
-            {%- if content["type"] == "text" -%}
-                {{ content["text"] }}
-            {%- endif -%}
-        {%- endfor -%}
-        {{ "\n" -}}
-    {%- elif message["role"] == "assistant" -%}
-        {{- "Assistant:\n" -}}
-        {%- for content in message["content"] -%}
-            {%- if content["type"] == "text" -%}
-                {{ content["text"] }}
-            {%- endif -%}
-        {%- endfor -%}
-        {{ eos_token -}}
-    {%- elif message["role"] == "system" -%}
-        {%- for content in message["content"] -%}
-            {%- if content["type"] == "text" -%}
-                {{ content["text"] + "\n" }}
-            {%- endif -%}
-        {%- endfor -%}
-    {%- endif -%}
-{%- endfor -%}
-{%- if add_generation_prompt -%}
-    {{- "Assistant:\n" -}}
-{%- endif -%}
-"""
-        
+            chat_template = _DEFAULT_CHAT_TEMPLATE
+
         # Render Jinja template to get text with placeholders
         text, generation_indices = render_jinja_template(
             conversations=[messages],
@@ -167,7 +173,7 @@ class PaddleOCRVLPreprocessor:
             add_generation_prompt=add_generation_prompt,
             return_tensors="pt",
         )
-        
+
         # Default image processor configuration
         default_image_processor_config = {
             "resample": 3,
@@ -180,14 +186,14 @@ class PaddleOCRVLPreprocessor:
             "temporal_patch_size": 1,
             "merge_size": 2
         }
-        
+
         # Merge user config with defaults
         if image_processor_config:
             default_image_processor_config.update(image_processor_config)
-        
+
         # Create image processor
         image_processor = PaddleOCRVLImageProcessor(**default_image_processor_config)
-        
+
         # Extract images from messages
         images = []
         for message in messages:
@@ -195,14 +201,14 @@ class PaddleOCRVLPreprocessor:
                 for content in message["content"]:
                     if content.get("type") == "image" and "image" in content:
                         images.append(content["image"])
-        
+
         # Process images
         images_info = image_processor(images=images, return_tensors="pt")
-        
+
         # Replace image placeholders in text
         if not isinstance(text, list):
             text = [text]
-        
+
         index = 0
         for i in range(len(text)):
             while "<|IMAGE_PLACEHOLDER|>" in text[i]:
@@ -218,10 +224,10 @@ class PaddleOCRVLPreprocessor:
                 )
                 index += 1
             text[i] = text[i].replace("<|placeholder|>", "<|IMAGE_PLACEHOLDER|>")
-        
+
         # Tokenize text
         text_inputs = self.tokenizer(text, return_tensors="pt")
-        
+
         return {
             "text_inputs": text_inputs,
             "images_info": images_info,
@@ -230,20 +236,20 @@ class PaddleOCRVLPreprocessor:
 
 class OVPaddleOCRVLForCausalLM(GenerationMixin):
     _is_stateful = True  # 标记为 stateful 模型，用于 transformers 的生成方法
-    
+
     def __init__(
         self,
         core=None,
         ov_model_path=None,
         device='CPU',
         llm_int4_compress=False,
-        llm_int8_compress=False, 
-        vision_int8_quant=False, 
+        llm_int8_compress=False,
+        vision_int8_quant=False,
         llm_int8_quant=False,
         llm_infer_list=[],
         vision_infer=[],
     ):
-        
+
         self.ov_model_path = ov_model_path
         self.core = core
         self.ov_device = device
@@ -270,7 +276,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             self.llm_compiled_model = core.compile_model(self.llm_model, device, config = ov_config)
         else:
             self.llm_compiled_model = core.compile_model(self.llm_model, device)
-            
+
         self.llm_request = self.llm_compiled_model.create_infer_request()
 
         self.input_names = {key.get_any_name(): idx for idx, key in enumerate(self.llm_compiled_model.inputs)}
@@ -292,7 +298,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         self.llm_embd = core.read_model(Path(f"{ov_model_path}/llm_embd.xml"))
         self.llm_embd_compiled_model = core.compile_model(self.llm_embd, device)
         self.llm_embd_request = self.llm_embd_compiled_model.create_infer_request()
-        
+
         self.tokenizer = AutoTokenizer.from_pretrained(ov_model_path, trust_remote_code=True)
 
         # Initialize preprocessor
@@ -304,7 +310,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         self.vision_infer = vision_infer
 
         self.rope_deltas = None
- 
+
 
     def vision_model_init(self):
         if self.vision_int8_quant:
@@ -331,7 +337,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         self.vision_encoder_request.start_async(inputs_dict, share_inputs=True)
         self.vision_encoder_request.wait()
         return torch.from_numpy(self.vision_encoder_request.get_tensor("vision_output").data)
-    
+
     def vision_mlp_run(self, image_features=None, image_grid_thw=None):
         inputs_dict = {}
         inputs_dict['image_features'] = image_features
@@ -385,11 +391,11 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             self.vision_infer.append(mlp_time)
 
             return vit_embeds
-        
+
     def can_generate(self):
         """Returns True to validate the check that the model using `GenerationMixin.generate()` can indeed generate."""
         return True
-    
+
     def _reorder_cache(self, past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor) -> Tuple[Tuple[torch.Tensor]]:
         self.next_beam_idx = np.array(beam_idx)  # save beam_idx to be used as an input in the next iteration
         return past_key_values
@@ -468,8 +474,8 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             past_key_values=past_key_values,
             hidden_states=None,
             attentions=None,
-        )   
-    
+        )
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -526,7 +532,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and past_key_values is None:
             model_inputs = {"inputs_embeds": inputs_embeds}
-        else:    
+        else:
             model_inputs = {"input_ids": input_ids}
 
         model_inputs.update(
@@ -709,8 +715,8 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                 )
 
             return position_ids, mrope_position_deltas
-    
-    def chat(self, messages=None, chat_template=None, generation_config=None, image_processor_config=None, verbose=False):
+
+    def chat(self, messages=None, chat_template=None, generation_config=None, image_processor_config=None, verbose=False, stopping_criteria=None):
         # Handle default generation_config
         if generation_config is None:
             generation_config = {
@@ -720,7 +726,16 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                 "max_new_tokens": 1024,
                 "do_sample": False,
             }
-        
+
+        prepared = self.prepare_inputs(messages, chat_template=chat_template, image_processor_config=image_processor_config)
+        response, _token_stats = self.generate_from_prepared(prepared, generation_config, stopping_criteria=stopping_criteria)
+        return response, None
+
+    def prepare_inputs(self, messages, chat_template=None, image_processor_config=None):
+        """
+        预处理阶段：图像处理 + vision 编码 + text embedding + position 计算。
+        返回 generate 所需的全部 tensor，可提前批量执行。
+        """
         inputs_dict = self.preprocessor.preprocess(messages=messages, chat_template=chat_template, image_processor_config=image_processor_config)
         input_ids = inputs_dict["text_inputs"]["input_ids"]
         attention_mask = inputs_dict["text_inputs"]["attention_mask"]
@@ -730,11 +745,8 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         inputs_embeds = self.llm_embd_run(input_ids)
         image_embeds = self.vision_model(pixel_values, image_grid_thw)
 
-        #image_token_id : 100295 video_token_id : 101307
         n_image_tokens = (input_ids == 100295).sum().item()
-        # image_embeds 可能是 list 或 tensor，需要统一处理
         if isinstance(image_embeds, (list, tuple)):
-            # 如果是 list，concat 成 tensor
             image_embeds = torch.cat(image_embeds, dim=0)
         elif isinstance(image_embeds, torch.Tensor):
             image_embeds = image_embeds.view(-1, image_embeds.shape[-1])
@@ -749,43 +761,408 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
         image_mask = mask_expanded.to(inputs_embeds.device)
 
-        image_embeds = image_embeds.to(
-            inputs_embeds.device, inputs_embeds.dtype
-        )
-
+        image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
         inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
 
-
-        if attention_mask.dim() == 1:
-            valid_seq_len = attention_mask.sum().item()
-        else:
-            valid_seq_len = attention_mask[0].sum().item()
-        
-        cache_position = torch.arange(
-            0,
-            valid_seq_len,
-            device=self.device,
-            dtype=torch.long
-        )
-
-        position_ids = None
         position_ids, rope_deltas = self.get_rope_index(
-            input_ids,
-            image_grid_thw,
-            None,
-            None,
-            attention_mask,
+            input_ids, image_grid_thw, None, None, attention_mask,
         )
-        self.rope_deltas = rope_deltas
 
-        # breakpoint()
-        generation_output = self.generate(
-             inputs_embeds=inputs_embeds,
-             attention_mask=attention_mask,
-             position_ids=position_ids,
-            **generation_config
+        return {
+            "inputs_embeds": inputs_embeds,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "rope_deltas": rope_deltas,
+        }
+
+    def batch_encode_images(self, pil_images: list, image_processor_config: Optional[dict] = None):
+        """
+        批量 vision encoding：一次性图像预处理 + 逐图 vision encode。
+
+        图像预处理（resize + normalize）可以一次性完成，但 vision encoder
+        由于模型导出限制，不支持 image_grid_thw batch > 1（内部广播形状不兼容），
+        因此 encoding 仍需逐图进行。
+
+        相比原始 prepare_inputs 逐块调用的优势：
+        - 图像预处理只调用一次 PaddleOCRVLImageProcessor（避免多次构造）
+        - 跳过文本处理和 tokenizer 开销，仅做 vision 部分
+
+        Args:
+            pil_images: PIL Image 列表
+            image_processor_config: 图像处理器配置
+
+        Returns:
+            list of (image_embeds, image_grid_thw)，每个元素对应一张图片，顺序与输入一致
+        """
+        if not pil_images:
+            return []
+
+        # 默认图像处理器配置
+        default_config = {
+            "resample": 3,
+            "rescale_factor": 0.00392156862745098,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "min_pixels": 112896,
+            "max_pixels": 1003520,
+            "patch_size": 14,
+            "temporal_patch_size": 1,
+            "merge_size": 2,
+        }
+        if image_processor_config:
+            default_config.update(image_processor_config)
+
+        image_processor = PaddleOCRVLImageProcessor(**default_config)
+
+        # 一次性图像预处理（resize + normalize）
+        images_info = image_processor(images=pil_images, return_tensors="pt")
+        pixel_values = images_info["pixel_values"]   # [total_patches, 3, 14, 14]
+        image_grid_thw = images_info["image_grid_thw"]  # [n_images, 3]
+
+        merge_size = default_config.get("merge_size", 2)
+        n_images = len(pil_images)
+
+        # 计算每张图的 patch 数和 token 数
+        patches_per_image = []
+        tokens_per_image = []
+        for thw in image_grid_thw:
+            t, h, w = thw[0].item(), thw[1].item(), thw[2].item()
+            patches_per_image.append(t * h * w)
+            tokens_per_image.append(t * (h // merge_size) * (w // merge_size))
+
+        # 按 pixel_values 拆分每张图的 patches
+        all_patches = []
+        offset = 0
+        for n_patch in patches_per_image:
+            all_patches.append(pixel_values[offset:offset + n_patch])
+            offset += n_patch
+
+        # 逐图 vision encoding（模型不支持多图 batch）
+        # 注意：vision_model 返回的 tensor 是 OV 输出 buffer 的 view，
+        # 下次调用会覆盖，必须 .clone() 保存副本。
+        results = []
+        for i in range(n_images):
+            img_thw = image_grid_thw[i:i+1]  # [1, 3]
+            img_embeds = self.vision_model(all_patches[i], img_thw)
+            if isinstance(img_embeds, (list, tuple)):
+                img_embeds = torch.cat(img_embeds, dim=0).clone()
+            elif isinstance(img_embeds, torch.Tensor):
+                img_embeds = img_embeds.view(-1, img_embeds.shape[-1]).clone()
+            results.append((img_embeds, img_thw))
+
+        return results
+
+    def prepare_inputs_from_embeds(
+        self,
+        messages,
+        image_embeds: torch.Tensor,
+        image_grid_thw: torch.Tensor,
+        chat_template=None,
+        image_processor_config=None,
+    ):
+        """
+        使用预计算的 vision embeddings 准备 LLM 输入（跳过 vision encoding）。
+
+        Args:
+            messages: 消息列表
+            image_embeds: 预计算的图像 embeddings [n_tokens, hidden_dim]
+            image_grid_thw: 图像网格信息 [1, 3]
+            chat_template: 聊天模板
+            image_processor_config: 图像处理器配置（仅用于计算 placeholder token 数量）
+        """
+        if chat_template is None:
+            chat_template = _DEFAULT_CHAT_TEMPLATE
+
+        # 渲染文本模板
+        text, _ = render_jinja_template(
+            conversations=[messages],
+            chat_template=chat_template,
+            add_generation_prompt=True,
+            return_tensors="pt",
         )
-        # print("generation_output: ", generation_output)
+
+        if not isinstance(text, list):
+            text = [text]
+
+        # 替换图像占位符（使用 image_grid_thw 计算 token 数量）
+        index = 0
+        for i in range(len(text)):
+            while "<|IMAGE_PLACEHOLDER|>" in text[i]:
+                text[i] = text[i].replace(
+                    "<|IMAGE_PLACEHOLDER|>",
+                    "<|placeholder|>" * (image_grid_thw[index].prod() // 2 // 2),
+                    1,
+                )
+                index += 1
+            text[i] = text[i].replace("<|placeholder|>", "<|IMAGE_PLACEHOLDER|>")
+
+        # Tokenize
+        text_inputs = self.tokenizer(text, return_tensors="pt")
+        input_ids = text_inputs["input_ids"]
+        attention_mask = text_inputs["attention_mask"]
+
+        # LLM embedding
+        inputs_embeds = self.llm_embd_run(input_ids)
+
+        # 合并 vision embeddings
+        if isinstance(image_embeds, torch.Tensor):
+            image_embeds = image_embeds.view(-1, image_embeds.shape[-1])
+
+        n_image_tokens = (input_ids == 100295).sum().item()
+        n_image_features = image_embeds.shape[0]
+        if n_image_tokens != n_image_features:
+            raise ValueError(
+                f"Image features and image tokens do not match: tokens: {n_image_tokens}, features {n_image_features}"
+            )
+
+        mask = input_ids == 100295
+        mask_unsqueezed = mask.unsqueeze(-1)
+        mask_expanded = mask_unsqueezed.expand_as(inputs_embeds)
+        image_mask = mask_expanded.to(inputs_embeds.device)
+
+        image_embeds = image_embeds.to(inputs_embeds.device, inputs_embeds.dtype)
+        inputs_embeds = inputs_embeds.masked_scatter(image_mask, image_embeds)
+
+        position_ids, rope_deltas = self.get_rope_index(
+            input_ids, image_grid_thw, None, None, attention_mask,
+        )
+
+        return {
+            "inputs_embeds": inputs_embeds,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "rope_deltas": rope_deltas,
+        }
+
+    @staticmethod
+    def _apply_repetition_penalty(logits, generated_ids, penalty=1.5):
+        """对已生成的 token 施加 repetition penalty，降低重复概率。"""
+        if penalty == 1.0 or not generated_ids:
+            return logits
+        prev_tokens = torch.tensor(generated_ids, dtype=torch.long, device=logits.device)
+        score = torch.gather(logits, -1, prev_tokens.unsqueeze(0)).squeeze(0)
+        # 正 logit 除以 penalty（降低），负 logit 乘以 penalty（更负）
+        score = torch.where(score > 0, score / penalty, score * penalty)
+        logits.scatter_(-1, prev_tokens.unsqueeze(0), score.unsqueeze(0))
+        return logits
+
+    def generate_from_prepared(self, prepared, generation_config, stopping_criteria=None):
+        """
+        从已准备好的 inputs 执行自回归生成（LLM decode 阶段）。
+        """
+        self.rope_deltas = prepared["rope_deltas"]
+
+        generate_kwargs = dict(
+            inputs_embeds=prepared["inputs_embeds"],
+            attention_mask=prepared["attention_mask"],
+            position_ids=prepared["position_ids"],
+            **generation_config,
+        )
+        # 默认添加 repetition_penalty
+        if "repetition_penalty" not in generate_kwargs:
+            generate_kwargs["repetition_penalty"] = 1.5
+        if stopping_criteria is not None:
+            generate_kwargs["stopping_criteria"] = stopping_criteria
+        generation_output = self.generate(**generate_kwargs)
+        output_token_count = generation_output.shape[1]
         response = self.tokenizer.batch_decode(generation_output, skip_special_tokens=True)[0]
-        # print("response: ", response)
-        return response, None
+
+        infer_times = list(self.llm_infer_list)
+        first_token_latency_ms = infer_times[0] if len(infer_times) > 0 else 0.0
+        decode_times = infer_times[1:] if len(infer_times) > 1 else []
+        decode_avg_ms = sum(decode_times) / len(decode_times) if decode_times else 0.0
+
+        token_stats = {
+            "output_tokens": output_token_count,
+            "first_token_latency_ms": first_token_latency_ms,
+            "decode_avg_ms": decode_avg_ms,
+        }
+        return response, token_stats
+
+    def _get_batch_request(self):
+        """获取用于 batch 推理的独立 infer request。"""
+        if not hasattr(self, '_batch_request') or self._batch_request is None:
+            self._batch_request = self.llm_compiled_model.create_infer_request()
+        return self._batch_request
+
+    def batch_generate(
+        self,
+        prepared_list: list,
+        max_new_tokens: int = 4096,
+        eos_token_id: int = None,
+        repetition_penalty: float = 1.5,
+    ) -> list:
+        """
+        Slot-based batch inference：多个 prepared inputs 一起做 prefill + decode。
+        """
+        if eos_token_id is None:
+            eos_token_id = self.tokenizer.eos_token_id
+
+        real_count = len(prepared_list)
+        batch_size = real_count
+
+        if _BATCH_VERBOSE:
+            print(f"    [BatchGen] batch_generate called, batch_size={batch_size}", flush=True)
+        batch_request = self._get_batch_request()
+
+        # Pad inputs_embeds 到同一长度（左填充）
+        seq_lens = [p["inputs_embeds"].shape[1] for p in prepared_list]
+        max_seq = max(seq_lens)
+        hidden_dim = prepared_list[0]["inputs_embeds"].shape[2]
+
+        if _BATCH_VERBOSE:
+            print(f"    [BatchGen] seq_lens={seq_lens}, max_seq={max_seq}, hidden_dim={hidden_dim}", flush=True)
+
+        batch_embeds = torch.zeros(batch_size, max_seq, hidden_dim)
+        batch_mask = torch.zeros(batch_size, max_seq, dtype=torch.long)
+        batch_pos = torch.zeros(3, batch_size, max_seq, dtype=torch.long)
+        rope_deltas_list = []
+
+        for i in range(batch_size):
+            p = prepared_list[i]
+            sl = p["inputs_embeds"].shape[1]
+            pad_len = max_seq - sl
+            batch_embeds[i, pad_len:, :] = p["inputs_embeds"][0]
+            batch_mask[i, pad_len:] = p["attention_mask"][0]
+            batch_pos[:, i, pad_len:] = p["position_ids"][:, 0, :]
+            rope_deltas_list.append(p["rope_deltas"])
+
+        beam_idx = np.arange(batch_size, dtype=np.int64)
+
+        # Prefill
+        batch_request.reset_state()
+
+        if _BATCH_VERBOSE:
+            print(f"    [BatchGen] Prefill: embeds={batch_embeds.shape}, mask={batch_mask.shape}, pos={batch_pos.shape}", flush=True)
+        _t_prefill_start = time.perf_counter()
+        batch_request.start_async({
+            'inputs_embeds': batch_embeds.numpy(),
+            'attention_mask': batch_mask.numpy(),
+            'position_ids': batch_pos.numpy(),
+            'beam_idx': beam_idx,
+        }, share_inputs=True)
+        batch_request.wait()
+        _t_prefill = (time.perf_counter() - _t_prefill_start) * 1000
+        if _BATCH_VERBOSE:
+            print(f"    [BatchGen] Prefill done: {_t_prefill:.1f}ms", flush=True)
+
+        logits = torch.from_numpy(batch_request.get_tensor("logits").data)
+
+        # 初始化 decode 状态
+        past_lens = list(seq_lens)
+        generated_ids = [[] for _ in range(batch_size)]
+        finished = [False] * batch_size
+
+        for i in range(batch_size):
+            row_logits = logits[i, 0, :].unsqueeze(0)
+            row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], repetition_penalty)
+            next_token = row_logits.squeeze(0).argmax().item()
+            generated_ids[i].append(next_token)
+            if next_token == eos_token_id:
+                finished[i] = True
+
+        decode_times = []
+        rope_delta_vals = [rd.item() for rd in rope_deltas_list]
+
+        # Pre-allocate attention_mask
+        max_total_len = max_seq + max_new_tokens
+        batch_mask_full = torch.zeros(batch_size, max_total_len, dtype=torch.long)
+        batch_mask_full[:, :max_seq] = batch_mask[:, :max_seq]
+        current_mask_len = max_seq
+
+        # Pre-cache pad_token embedding and reusable tensors
+        pad_emb = self.llm_embd_run(torch.tensor([[self.pad_token_id]], dtype=torch.long))[0]
+        new_pos = torch.zeros(3, batch_size, 1, dtype=torch.long)
+        new_embeds = pad_emb.unsqueeze(0).expand(batch_size, -1, -1).contiguous().clone()
+        new_pos_np = new_pos.numpy()
+        new_embeds_np = new_embeds.numpy()
+
+        # Decode loop
+        for step in range(1, max_new_tokens):
+            if all(finished):
+                break
+
+            token_ids = []
+            active_indices = []
+            for i in range(batch_size):
+                if not finished[i]:
+                    token_ids.append(generated_ids[i][-1])
+                    active_indices.append(i)
+
+            for i in range(batch_size):
+                if finished[i]:
+                    new_embeds[i] = pad_emb
+
+            if active_indices:
+                batch_token_ids = torch.tensor(token_ids, dtype=torch.long).unsqueeze(1)
+                batch_emb = self.llm_embd_run(batch_token_ids)
+                for j, idx in enumerate(active_indices):
+                    new_embeds[idx] = batch_emb[j]
+
+            batch_mask_full[:, current_mask_len] = 1
+            current_mask_len += 1
+            batch_mask_view = batch_mask_full[:, :current_mask_len]
+
+            for i in range(batch_size):
+                new_pos[:, i, 0] = past_lens[i] + rope_delta_vals[i]
+
+            _t_decode_start = time.perf_counter()
+            batch_request.start_async({
+                'inputs_embeds': new_embeds_np,
+                'attention_mask': batch_mask_view.numpy(),
+                'position_ids': new_pos_np,
+                'beam_idx': beam_idx,
+            }, share_inputs=True)
+            batch_request.wait()
+            _t_decode = (time.perf_counter() - _t_decode_start) * 1000
+            decode_times.append(_t_decode)
+
+            if _BATCH_VERBOSE and (step <= 3 or step % 50 == 0):
+                print(f"    [BatchGen] decode step={step}, infer={_t_decode:.1f}ms, mask_len={current_mask_len}, finished={finished}", flush=True)
+
+            logits = torch.from_numpy(batch_request.get_tensor("logits").data)
+
+            for i in range(batch_size):
+                past_lens[i] += 1
+                if finished[i]:
+                    continue
+
+                row_logits = logits[i, 0, :].unsqueeze(0)
+                row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], repetition_penalty)
+                next_token = row_logits.squeeze(0).argmax().item()
+                generated_ids[i].append(next_token)
+
+                if next_token == eos_token_id:
+                    finished[i] = True
+
+        # 解码结果
+        total_steps = len(decode_times)
+        if _BATCH_VERBOSE:
+            print(f"    [BatchGen] Decode loop finished. Total steps={total_steps}, finished={finished}", flush=True)
+        results = []
+        for i in range(batch_size):
+            output_ids = torch.tensor([generated_ids[i]], dtype=torch.long)
+            response = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+
+            n_output = len(generated_ids[i])
+            n_decode = n_output - 1  # first token from prefill
+            if n_decode > 0 and decode_times:
+                per_seq_decode = decode_times[:n_decode]
+                decode_avg = sum(per_seq_decode) / len(per_seq_decode)
+                total_decode_ms = sum(per_seq_decode)
+            else:
+                decode_avg = 0.0
+                total_decode_ms = 0.0
+            if _BATCH_VERBOSE:
+                print(f"    [BatchGen] slot{i}: output_tokens={n_output}, decode_steps={n_decode}, "
+                      f"decode_avg={decode_avg:.1f}ms/tok, total_decode={total_decode_ms:.1f}ms", flush=True)
+
+            token_stats = {
+                "output_tokens": n_output,
+                "first_token_latency_ms": _t_prefill,
+                "decode_avg_ms": decode_avg,
+                "total_decode_ms": total_decode_ms,
+            }
+            results.append((response, token_stats))
+
+        return results
