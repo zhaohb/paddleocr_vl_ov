@@ -37,7 +37,7 @@ NON_TEXT_PENALTY_LABELS = {
 }
 
 # 文本类 block 使用的 repetition_penalty 值（>1.0 = 抑制重复）
-TEXT_REPETITION_PENALTY = 1.0
+TEXT_REPETITION_PENALTY = 1.2
 
 # 默认聊天模板（PaddleOCR-VL 格式）
 _DEFAULT_CHAT_TEMPLATE = """{%- if not add_generation_prompt is defined -%}
