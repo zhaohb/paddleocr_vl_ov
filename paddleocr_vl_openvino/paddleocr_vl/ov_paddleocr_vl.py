@@ -28,6 +28,17 @@ _BATCH_VERBOSE = False
 from .image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
 import numpy as np
 
+# 非文本类标签：这些 block 的输出有固定格式（HTML / LaTeX / 结构化），
+# 不应施加 repetition_penalty，否则会破坏格式。
+NON_TEXT_PENALTY_LABELS = {
+    "table", "chart",
+    "display_formula", "inline_formula", "formula_number",
+    "seal", "image", "header_image", "footer_image"
+}
+
+# 文本类 block 使用的 repetition_penalty 值（>1.0 = 抑制重复）
+TEXT_REPETITION_PENALTY = 1.2
+
 # 默认聊天模板（PaddleOCR-VL 格式）
 _DEFAULT_CHAT_TEMPLATE = """{%- if not add_generation_prompt is defined -%}
     {%- set add_generation_prompt = true -%}
@@ -946,9 +957,14 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         logits.scatter_(-1, prev_tokens.unsqueeze(0), score.unsqueeze(0))
         return logits
 
-    def generate_from_prepared(self, prepared, generation_config, stopping_criteria=None):
+    def generate_from_prepared(self, prepared, generation_config, stopping_criteria=None, block_label=None):
         """
         从已准备好的 inputs 执行自回归生成（LLM decode 阶段）。
+
+        Args:
+            block_label: 可选，layout 检测的 block 类型标签。
+                         若提供，则根据标签自动决定 repetition_penalty：
+                         非文本类（NON_TEXT_PENALTY_LABELS）→ 1.0，文本类 → TEXT_REPETITION_PENALTY。
         """
         self.rope_deltas = prepared["rope_deltas"]
 
@@ -958,9 +974,13 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             position_ids=prepared["position_ids"],
             **generation_config,
         )
-        # 默认添加 repetition_penalty
-        if "repetition_penalty" not in generate_kwargs:
-            generate_kwargs["repetition_penalty"] = 1.5
+        # 根据 block 类型决定 repetition_penalty
+        if block_label is not None:
+            generate_kwargs["repetition_penalty"] = (
+                1.0 if block_label in NON_TEXT_PENALTY_LABELS else TEXT_REPETITION_PENALTY
+            )
+        elif "repetition_penalty" not in generate_kwargs:
+            generate_kwargs["repetition_penalty"] = 1.0
         if stopping_criteria is not None:
             generate_kwargs["stopping_criteria"] = stopping_criteria
         generation_output = self.generate(**generate_kwargs)
@@ -990,10 +1010,15 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         prepared_list: list,
         max_new_tokens: int = 4096,
         eos_token_id: int = None,
-        repetition_penalty: float = 1.5,
+        repetition_penalty: float = 1.0,
+        block_labels: list = None,
     ) -> list:
         """
         Slot-based batch inference：多个 prepared inputs 一起做 prefill + decode。
+
+        Args:
+            block_labels: 可选，每个 slot 对应的 layout block 类型标签列表。
+                          若提供，则按 slot 独立决定 repetition_penalty（优先于 repetition_penalty 参数）。
         """
         if eos_token_id is None:
             eos_token_id = self.tokenizer.eos_token_id
@@ -1001,8 +1026,17 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         real_count = len(prepared_list)
         batch_size = real_count
 
+        # 计算每个 slot 的 repetition_penalty
+        if block_labels is not None:
+            slot_penalties = [
+                1.0 if lb in NON_TEXT_PENALTY_LABELS else TEXT_REPETITION_PENALTY
+                for lb in block_labels
+            ]
+        else:
+            slot_penalties = [repetition_penalty] * batch_size
+
         if _BATCH_VERBOSE:
-            print(f"    [BatchGen] batch_generate called, batch_size={batch_size}", flush=True)
+            print(f"    [BatchGen] batch_generate called, batch_size={batch_size}, slot_penalties={slot_penalties}", flush=True)
         batch_request = self._get_batch_request()
 
         # Pad inputs_embeds 到同一长度（左填充）
@@ -1055,7 +1089,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
         for i in range(batch_size):
             row_logits = logits[i, 0, :].unsqueeze(0)
-            row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], repetition_penalty)
+            row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], slot_penalties[i])
             next_token = row_logits.squeeze(0).argmax().item()
             generated_ids[i].append(next_token)
             if next_token == eos_token_id:
@@ -1128,7 +1162,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                     continue
 
                 row_logits = logits[i, 0, :].unsqueeze(0)
-                row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], repetition_penalty)
+                row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], slot_penalties[i])
                 next_token = row_logits.squeeze(0).argmax().item()
                 generated_ids[i].append(next_token)
 

@@ -8,9 +8,9 @@ import numpy as np
 from pathlib import Path
 
 # 设为 True 可打开 batch 推理的详细日志
-_BATCH_VERBOSE = True
+_BATCH_VERBOSE = False
 # 设为 False 可关闭 Pipeline 布局检测/VLM 推理的耗时日志
-_PIPELINE_VERBOSE = True
+_PIPELINE_VERBOSE = False
 from typing import Union, List, Optional, Dict, Any
 from functools import partial
 import random
@@ -59,7 +59,7 @@ from ..pp_doclayoutv2.ov_pp_layoutv2_infer import (
 from ..pp_doclayoutv2.result import LayoutAnalysisResult
 
 # 导入 VLM 模型
-from ..paddleocr_vl.ov_paddleocr_vl import OVPaddleOCRVLForCausalLM
+from ..paddleocr_vl.ov_paddleocr_vl import OVPaddleOCRVLForCausalLM, NON_TEXT_PENALTY_LABELS, TEXT_REPETITION_PENALTY
 
 # 导入图像处理
 from ..paddleocr_vl.image_processing_paddleocr_vl import PaddleOCRVLImageProcessor
@@ -2372,12 +2372,18 @@ class PaddleOCRVL:
                 batch_indices = valid_indices[batch_start:batch_start + batch_size]
                 batch_prepared = [prepared_list[i]["prepared"] for i in batch_indices]
 
+                # 收集 sub-batch 内 block 类型标签，传给 batch_generate 做每 slot 独立 penalty
+                batch_labels = [prepared_list[i]["block_info"].get("label", "") for i in batch_indices]
+                if _BATCH_VERBOSE:
+                    print(f"    [VLM] sub-batch labels={batch_labels}", flush=True)
+
                 try:
                     _t_gen_start = time.time()
                     batch_results = self.vlm_model.batch_generate(
                         batch_prepared,
                         max_new_tokens=max_new_tokens,
                         eos_token_id=self.vlm_model.tokenizer.eos_token_id,
+                        block_labels=batch_labels,
                     )
                     _t_gen = time.time() - _t_gen_start
 
@@ -2399,9 +2405,10 @@ class PaddleOCRVL:
                     traceback.print_exc()
                     for idx in batch_indices:
                         item = prepared_list[idx]
+                        _label = item["block_info"].get("label", "")
                         try:
                             result_str, _ = self.vlm_model.generate_from_prepared(
-                                item["prepared"], generation_config
+                                item["prepared"], generation_config, block_label=_label
                             )
                         except Exception:
                             result_str = ""
@@ -2413,10 +2420,13 @@ class PaddleOCRVL:
                     results[idx] = {"result": ""}
                     continue
 
+                # 按 block 类型决定 repetition_penalty
+                _label = item["block_info"].get("label", "")
+
                 try:
                     _t_gen_start = time.time()
                     result_str, token_stats = self.vlm_model.generate_from_prepared(
-                        prepared, generation_config
+                        prepared, generation_config, block_label=_label
                     )
                     _t_gen = time.time() - _t_gen_start
                 except Exception as e:
