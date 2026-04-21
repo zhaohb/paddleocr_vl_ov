@@ -1105,7 +1105,9 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         current_mask_len = max_seq
 
         # Pre-cache pad_token embedding and reusable tensors
-        pad_emb = self.llm_embd_run(torch.tensor([[self.pad_token_id]], dtype=torch.long))[0]
+        # 必须 .clone()，否则 pad_emb 是 OV 输出 buffer 的 view，
+        # 后续 llm_embd_run 调用会覆盖 buffer 导致 pad_emb 变成脏数据
+        pad_emb = self.llm_embd_run(torch.tensor([[self.pad_token_id]], dtype=torch.long))[0].clone()
         new_pos = torch.zeros(3, batch_size, 1, dtype=torch.long)
         new_embeds = pad_emb.unsqueeze(0).expand(batch_size, -1, -1).contiguous().clone()
         new_pos_np = new_pos.numpy()
@@ -1133,7 +1135,10 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                 for j, idx in enumerate(active_indices):
                     new_embeds[idx] = batch_emb[j]
 
-            batch_mask_full[:, current_mask_len] = 1
+            batch_mask_full[:, current_mask_len] = 0
+            for i in range(batch_size):
+                if not finished[i]:
+                    batch_mask_full[i, current_mask_len] = 1
             current_mask_len += 1
             batch_mask_view = batch_mask_full[:, :current_mask_len]
 
@@ -1198,5 +1203,8 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                 "total_decode_ms": total_decode_ms,
             }
             results.append((response, token_stats))
+
+        # 释放 batch infer request，避免跨次调用 KV cache 状态残留
+        self._batch_request = None
 
         return results
