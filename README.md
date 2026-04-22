@@ -127,12 +127,12 @@ pipeline = PaddleOCRVL(
     layout_model_path=None,  # Automatically download layout detection model
     vlm_model_path=None,      # Automatically download VLM model
     vlm_device="GPU", 
-    layout_device="GPU",
+    layout_device="CPU",
     layout_precision="fp16",  
     llm_int4_compress=False,  # LLM INT4 quantization compression
-    vision_int8_quant=True,   # Vision model INT8 quantization
-    llm_int8_compress=True,   # LLM INT8 quantization compression
-    llm_int8_quant=True,      # LLM INT8 quantization
+    vision_int8_quant=False,  # Vision model INT8 quantization
+    llm_int8_compress=False,  # LLM INT8 quantization compression
+    llm_int8_quant=False,     # LLM INT8 quantization
 )
 
 # Predict
@@ -155,14 +155,14 @@ for res in output:
 The pipeline supports various quantization and compression options to optimize model size, memory usage, and inference speed:
 
 - **`llm_int4_compress`** (default: `False`): INT4 quantization compression for LLM model. Significantly reduces model size and memory usage, but may slightly affect accuracy.
-- **`vision_int8_quant`** (default: `True`): INT8 quantization for Vision model. Balances accuracy and performance.
-- **`llm_int8_compress`** (default: `True`): INT8 quantization compression for LLM model. Reduces model size while maintaining good accuracy.
-- **`llm_int8_quant`** (default: `True`): INT8 quantization for LLM model. Improves inference speed with minimal accuracy loss.
+- **`vision_int8_quant`** (default: `False`): INT8 quantization for Vision model. Balances accuracy and performance.
+- **`llm_int8_compress`** (default: `False`): INT8 quantization compression for LLM model. Reduces model size while maintaining good accuracy.
+- **`llm_int8_quant`** (default: `False`): INT8 quantization for LLM model. Improves inference speed with minimal accuracy loss.
 
 **Recommendations:**
-- For **maximum accuracy**: Set all quantization options to `False`
-- For **balanced performance**: Use default settings (`vision_int8_quant=True`, `llm_int8_compress=True`, `llm_int8_quant=True`, `llm_int4_compress=False`)
-- For **maximum compression**: Use settings(`llm_int4_compress=True` `llm_int8_quant=True`, `llm_int4_compress=False` `llm_int8_compress=False`) (smallest model size, but may affect accuracy)
+- For **maximum accuracy**: Set all quantization options to `False` (default)
+- For **balanced performance**: Use settings (`vision_int8_quant=True`, `llm_int8_compress=True`, `llm_int8_quant=True`, `llm_int4_compress=False`)
+- For **maximum compression**: Use settings (`llm_int4_compress=True`, `llm_int8_quant=True`, `llm_int8_compress=False`) (smallest model size, but may affect accuracy)
 
 ### Method 1: Fully Automatic Download (Recommended)
 
@@ -175,12 +175,12 @@ pipeline = PaddleOCRVL(
     layout_model_path=None,  # Automatic download
     vlm_model_path=None,     # Automatic download
     vlm_device="GPU", 
-    layout_device="GPU",
+    layout_device="CPU",
     layout_precision="fp16",
     llm_int4_compress=False,  # LLM INT4 quantization compression
-    vision_int8_quant=True,   # Vision model INT8 quantization
-    llm_int8_compress=True,   # LLM INT8 quantization compression
-    llm_int8_quant=True,      # LLM INT8 quantization
+    vision_int8_quant=False,  # Vision model INT8 quantization
+    llm_int8_compress=False,  # LLM INT8 quantization compression
+    llm_int8_quant=False,     # LLM INT8 quantization
 )
 ```
 
@@ -193,11 +193,11 @@ pipeline = PaddleOCRVL(
     layout_model_path="C:/path/to/existing/model.xml",
     vlm_model_path="C:/path/to/existing/vlm_model",
     vlm_device="GPU", 
-    layout_device="NPU",
+    layout_device="CPU",
     llm_int4_compress=False,
-    vision_int8_quant=True,
-    llm_int8_compress=True,
-    llm_int8_quant=True,
+    vision_int8_quant=False,
+    llm_int8_compress=False,
+    llm_int8_quant=False,
 )
 ```
 
@@ -211,12 +211,12 @@ pipeline = PaddleOCRVL(
     layout_model_path=None,  # Automatically download layout detection model
     vlm_model_path=None,     # Automatically download VLM model
     vlm_device="GPU",        # Use GPU for VLM model
-    layout_device="GPU",     # Use GPU for layout detection model
+    layout_device="CPU",     # Use CPU for layout detection model
     layout_precision="fp16",
     llm_int4_compress=False,  # LLM INT4 quantization compression (default: False)
-    vision_int8_quant=True,   # Vision model INT8 quantization (default: True)
-    llm_int8_compress=True,   # LLM INT8 quantization compression (default: True)
-    llm_int8_quant=True,      # LLM INT8 quantization (default: True)
+    vision_int8_quant=False,  # Vision model INT8 quantization (default: False)
+    llm_int8_compress=False,  # LLM INT8 quantization compression (default: False)
+    llm_int8_quant=False,     # LLM INT8 quantization (default: False)
 )
 
 # Execute prediction
@@ -246,7 +246,7 @@ for res in output:
 | `layout_model_path` | `Optional[str]` | `None` | Layout detection model path (.xml file), automatically downloads if `None`. **Note:** If a specific `.xml` file path is provided, the `layout_precision` parameter will be ignored |
 | `vlm_model_path` | `Optional[str]` | `None` | VLM model path (directory containing vision.xml, llm_stateful.xml, etc.), automatically downloads if `None` |
 | `vlm_device` | `str` | `"CPU"` | VLM model inference device: `"CPU"`, `"GPU"`, `"AUTO"` |
-| `layout_device` | `str` | `"NPU"` | Layout detection model inference device: `"CPU"`, `"GPU"`, `"NPU"`, `"AUTO"` |
+| `layout_device` | `str` | `"CPU"` | Layout detection model inference device: `"CPU"`, `"GPU"`, `"NPU"`, `"AUTO"` |
 | `use_layout_detection` | `bool` | `True` | Whether to use layout detection |
 | `use_chart_recognition` | `bool` | `False` | Whether to use chart recognition |
 | `merge_layout_blocks` | `bool` | `True` | Whether to merge layout blocks |
@@ -254,9 +254,9 @@ for res in output:
 | `cache_dir` | `Optional[str]` | `None` | ModelScope model cache directory, uses default cache directory if `None` |
 | `layout_precision` | `str` | `"fp16"` | Layout detection model precision selection: currently only `"fp16"` (DocLayoutV3.xml single-file model). This parameter is kept for backward compatibility and will be ignored. |
 | `llm_int4_compress` | `bool` | `False` | Enable LLM INT4 quantization compression (significantly reduces model size and memory usage, may slightly affect accuracy) |
-| `vision_int8_quant` | `bool` | `True` | Enable Vision model INT8 quantization (balances accuracy and performance) |
-| `llm_int8_compress` | `bool` | `True` | Enable LLM INT8 quantization compression (reduces model size, may slightly affect accuracy) |
-| `llm_int8_quant` | `bool` | `True` | Enable LLM INT8 quantization (improves inference speed, may slightly affect accuracy) |
+| `vision_int8_quant` | `bool` | `False` | Enable Vision model INT8 quantization (balances accuracy and performance) |
+| `llm_int8_compress` | `bool` | `False` | Enable LLM INT8 quantization compression (reduces model size, may slightly affect accuracy) |
+| `llm_int8_quant` | `bool` | `False` | Enable LLM INT8 quantization (improves inference speed, may slightly affect accuracy) |
 
 #### `predict` Method
 
@@ -270,6 +270,8 @@ def predict(
     layout_unclip_ratio: Optional[Union[float, tuple]] = None,
     layout_merge_bboxes_mode: Optional[str] = None,
     max_new_tokens: Optional[int] = None,
+    vlm_batch_size: int = 8,
+    early_stop_ratio: float = 0.0,
     **kwargs,
 ) -> List[PaddleOCRVLResult]
 ```
@@ -283,6 +285,8 @@ def predict(
 - `layout_unclip_ratio`: Layout box expansion ratio (float or tuple `(w_ratio, h_ratio)`)
 - `layout_merge_bboxes_mode`: Layout box merge mode (`"union"`, `"large"`, `"small"`)
 - `max_new_tokens`: Maximum number of tokens to generate for VLM
+- `vlm_batch_size`: Number of image blocks processed in a single VLM batch (default: `8`). Increasing this can speed up inference for documents with many blocks, at the cost of higher memory usage.
+- `early_stop_ratio`: Batch early-termination ratio (default: `0.0`, disabled). When set to a value such as `0.7`, the batch loop will stop and flush remaining results once 70% of the current batch's slots have finished, reducing tail-latency on uneven batches.
 
 **Return Value:**
 
@@ -348,13 +352,52 @@ pipeline = PaddleOCRVL(
     vlm_model_path=None,
     cache_dir="./models_cache",  # Custom cache directory
     vlm_device="GPU",
-    layout_device="GPU",
+    layout_device="CPU",
     llm_int4_compress=False,
-    vision_int8_quant=True,
-    llm_int8_compress=True,
-    llm_int8_quant=True,
+    vision_int8_quant=False,
+    llm_int8_compress=False,
+    llm_int8_quant=False,
 )
 ```
+
+### PDF OCR Script
+
+The `pdf_ocr.py` script provides a cross-page dynamic batching OCR pipeline for PDF files. It converts each PDF page to an image and processes them through the PaddleOCR-VL pipeline.
+
+**Basic usage:**
+
+```bash
+# Minimal – process a PDF with default settings
+python pdf_ocr.py --pdf input.pdf
+
+# Specify output directory and rendering DPI
+python pdf_ocr.py --pdf input.pdf --output pdf_output --dpi 150
+
+# Use GPU for VLM, CPU for layout detection
+python pdf_ocr.py --pdf input.pdf --device GPU --layout-device CPU
+
+# Tune batch size and enable early-stop
+python pdf_ocr.py --pdf input.pdf --vlm-batch-size 40 --early-stop-ratio 0.7
+```
+
+**Key arguments:**
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `--pdf` | *(required)* | Input PDF file path |
+| `--output` | `pdf_output` | Output directory |
+| `--dpi` | `100` | PDF rendering DPI |
+| `--device` | `GPU` | VLM inference device (`CPU`/`GPU`/`AUTO`) |
+| `--layout-device` | `CPU` | Layout detection device (`CPU`/`GPU`/`NPU`/`AUTO`) |
+| `--vlm-batch-size` | `40` | VLM batch size (number of blocks per batch) |
+| `--max-new-tokens` | `1024` | Maximum tokens to generate per block |
+| `--window-pages` | `10` | Pages per processing window (`0` = all pages at once) |
+| `--early-stop-ratio` | `0.0` | Batch early-termination ratio (`0` = disabled, e.g. `0.7` stops when 70% of a batch is done) |
+| `--layout-model-path` | `None` | Layout model path (auto-download if `None`) |
+| `--vlm-model-path` | `None` | VLM model path (auto-download if `None`) |
+| `--layout-threshold` | `0.4` | Layout detection confidence threshold |
+
+Results are saved under `<output>/<pdf_stem>/results/` as per-page `.json` and `.md` files.
 
 ### Gradio Server
 

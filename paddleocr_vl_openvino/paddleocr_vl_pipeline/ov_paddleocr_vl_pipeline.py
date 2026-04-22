@@ -1106,7 +1106,7 @@ class PaddleOCRVL:
         layout_model_path: Optional[str] = None,
         vlm_model_path: Optional[str] = None,
         vlm_device: str = "CPU",
-        layout_device: str = "NPU",
+        layout_device: str = "CPU",
         use_layout_detection: bool = True,
         use_chart_recognition: bool = True,
         use_seal_recognition: bool = False,
@@ -1116,9 +1116,9 @@ class PaddleOCRVL:
         cache_dir: Optional[str] = None,
         layout_precision: str = "fp16",
         llm_int4_compress: bool = False,
-        vision_int8_quant: bool = True,
-        llm_int8_compress: bool = True,
-        llm_int8_quant: bool = True,
+        vision_int8_quant: bool = False,
+        llm_int8_compress: bool = False,
+        llm_int8_quant: bool = False,
     ):
         """
         初始化 PaddleOCR-VL Pipeline
@@ -1127,7 +1127,7 @@ class PaddleOCRVL:
             layout_model_path: 布局检测模型路径（OpenVINO IR .xml 文件），如果为 None 则自动下载
             vlm_model_path: VLM 模型路径（包含 vision.xml, vision_mlp.xml, llm_stateful.xml 等的目录），如果为 None 则自动下载
             vlm_device: VLM 模型推理设备 ("CPU", "GPU", "AUTO")
-            layout_device: 布局检测模型（PP-DocLayoutV2）推理设备，默认 "NPU" ("CPU", "GPU", "NPU", "AUTO")
+            layout_device: 布局检测模型（PP-DocLayoutV2）推理设备，默认 "CPU" ("CPU", "GPU", "NPU", "AUTO")
             use_layout_detection: 是否使用布局检测
             use_chart_recognition: 是否使用图表识别
             merge_layout_blocks: 是否合并布局块
@@ -1347,7 +1347,7 @@ class PaddleOCRVL:
         layout_shape_mode: Optional[str] = "auto",
         max_new_tokens: Optional[int] = None,
         prompt_label: str = "ocr",
-        vlm_batch_size: int = 4,
+        vlm_batch_size: int = 8,
         **kwargs,
     ):
         """
@@ -1689,7 +1689,7 @@ class PaddleOCRVL:
         use_seal_recognition: Optional[bool] = None,
         use_ocr_for_image_block: Optional[bool] = None,
         layout_shape_mode: str = "auto",
-        vlm_batch_size: int = 4,
+        vlm_batch_size: int = 8,
     ):
         """
         处理视觉语言模型部分（布局解析）
@@ -1778,7 +1778,7 @@ class PaddleOCRVL:
         use_seal_recognition: bool = False,
         use_ocr_for_image_block: bool = False,
         layout_shape_mode: str = "auto",
-        vlm_batch_size: int = 4,
+        vlm_batch_size: int = 8,
         early_stop_ratio: float = 0.0,
     ):
         """
