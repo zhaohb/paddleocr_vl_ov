@@ -1779,6 +1779,7 @@ class PaddleOCRVL:
         use_ocr_for_image_block: bool = False,
         layout_shape_mode: str = "auto",
         vlm_batch_size: int = 4,
+        early_stop_ratio: float = 0.0,
     ):
         """
         获取布局解析结果（参考 PaddleX 的实现，确保逻辑一致）
@@ -1927,7 +1928,8 @@ class PaddleOCRVL:
             queries_bucket = batch_dict_by_pixel[pixel_key]["queries"]
             block_infos_bucket = batch_dict_by_pixel[pixel_key]["block_infos"]
             # Spotting 分支不强制覆盖 min/max_pixels（与 PaddleX 行为一致）
-            vlm_kwargs = {"max_new_tokens": max_new_tokens, "vlm_batch_size": vlm_batch_size}
+            vlm_kwargs = {"max_new_tokens": max_new_tokens, "vlm_batch_size": vlm_batch_size,
+                          "early_stop_ratio": early_stop_ratio}
             if not has_spotting:
                 vlm_kwargs["min_pixels"] = min_pixels
                 vlm_kwargs["max_pixels"] = max_pixels
@@ -2358,61 +2360,111 @@ class PaddleOCRVL:
         _t_phase2_start = time.time()
         results = [None] * n_blocks
         batch_size = kwargs.get("vlm_batch_size", 4)
+        early_stop_ratio = kwargs.get("early_stop_ratio", 0.0)
 
         if n_blocks > 1 and batch_size > 1:
             if _BATCH_VERBOSE:
-                print(f"    [VLM] Phase2 使用动态 batch (bs={batch_size})", flush=True)
+                print(f"    [VLM] Phase2 使用动态 batch (bs={batch_size}, "
+                      f"early_stop={early_stop_ratio:.2f})", flush=True)
 
             valid_indices = [i for i, item in enumerate(prepared_list) if item["prepared"] is not None]
             for i in range(n_blocks):
                 if i not in valid_indices:
                     results[i] = {"result": ""}
 
-            for batch_start in range(0, len(valid_indices), batch_size):
-                batch_indices = valid_indices[batch_start:batch_start + batch_size]
-                batch_prepared = [prepared_list[i]["prepared"] for i in batch_indices]
+            # Work queue: (orig_idx, prepared, label, prev_generated_ids, original_prepared)
+            from collections import deque
+            work_queue = deque()
+            for i in valid_indices:
+                prep = prepared_list[i]["prepared"]
+                work_queue.append((
+                    i, prep,
+                    prepared_list[i]["block_info"].get("label", ""),
+                    [],   # no previous generated ids
+                    prep,  # original prepared (for resume)
+                ))
 
-                # 收集 sub-batch 内 block 类型标签，传给 batch_generate 做每 slot 独立 penalty
-                batch_labels = [prepared_list[i]["block_info"].get("label", "") for i in batch_indices]
+            n_resumed_total = 0
+
+            while work_queue:
+                batch_items = []
+                for _ in range(min(batch_size, len(work_queue))):
+                    batch_items.append(work_queue.popleft())
+
+                batch_prepared = [item[1] for item in batch_items]
+                batch_labels = [item[2] for item in batch_items]
+                batch_prev_ids = [item[3] for item in batch_items]
+
+                # Only early-stop if there are more items waiting to backfill
+                use_early_stop = early_stop_ratio if len(work_queue) > 0 else 0.0
+
                 if _BATCH_VERBOSE:
-                    print(f"    [VLM] sub-batch labels={batch_labels}", flush=True)
+                    n_resumed_in = sum(1 for _, _, _, prev, _ in batch_items if prev)
+                    print(f"    [VLM] sub-batch: {len(batch_items)} items "
+                          f"({n_resumed_in} resumed), labels={batch_labels}, "
+                          f"early_stop={use_early_stop:.2f}", flush=True)
 
                 try:
                     _t_gen_start = time.time()
-                    batch_results = self.vlm_model.batch_generate(
+                    batch_results, unfinished = self.vlm_model.batch_generate(
                         batch_prepared,
                         max_new_tokens=max_new_tokens,
                         eos_token_id=self.vlm_model.tokenizer.eos_token_id,
                         block_labels=batch_labels,
+                        early_stop_ratio=use_early_stop,
+                        prev_generated_ids=batch_prev_ids,
                     )
                     _t_gen = time.time() - _t_gen_start
 
-                    for j, idx in enumerate(batch_indices):
-                        result_str, token_stats = batch_results[j]
-                        item = prepared_list[idx]
-                        block_info = item["block_info"]
-                        if _BATCH_VERBOSE:
-                            seq_gen_s = (token_stats['first_token_latency_ms'] + token_stats.get('total_decode_ms', 0)) / 1000
-                            print(f"        [VLM] 块{idx+1}/{n_blocks}, label={block_info.get('label','?')}, "
-                                  f"input={item['input_tokens']}tok, output={token_stats['output_tokens']}tok, "
-                                  f"TTFT={token_stats['first_token_latency_ms']:.1f}ms, "
-                                  f"decode={token_stats['decode_avg_ms']:.1f}ms/tok, "
-                                  f"生成={seq_gen_s:.3f}s")
-                        results[idx] = {"result": result_str}
+                    # Collect finished results
+                    unfinished_slots = {uf["slot_index"] for uf in unfinished}
+                    for j, (orig_idx, _, _, _, _) in enumerate(batch_items):
+                        if j not in unfinished_slots:
+                            result_str, token_stats = batch_results[j]
+                            item = prepared_list[orig_idx]
+                            block_info = item["block_info"]
+                            if _BATCH_VERBOSE:
+                                seq_gen_s = (token_stats['first_token_latency_ms'] + token_stats.get('total_decode_ms', 0)) / 1000
+                                print(f"        [VLM] 块{orig_idx+1}/{n_blocks}, label={block_info.get('label','?')}, "
+                                      f"input={item['input_tokens']}tok, output={token_stats['output_tokens']}tok, "
+                                      f"TTFT={token_stats['first_token_latency_ms']:.1f}ms, "
+                                      f"decode={token_stats['decode_avg_ms']:.1f}ms/tok, "
+                                      f"生成={seq_gen_s:.3f}s")
+                            results[orig_idx] = {"result": result_str}
+
+                    # Resume unfinished items and push back to front of queue
+                    for uf in reversed(unfinished):
+                        j = uf["slot_index"]
+                        orig_idx, _, label, _, original_prep = batch_items[j]
+                        resumed = self.vlm_model.resume_prepared(
+                            original_prep, uf["generated_ids"]
+                        )
+                        work_queue.appendleft((
+                            orig_idx, resumed, label,
+                            uf["generated_ids"], original_prep,
+                        ))
+                        n_resumed_total += 1
+
+                    if _BATCH_VERBOSE and unfinished:
+                        print(f"    [VLM] {len(unfinished)} slots unfinished, "
+                              f"resumed and pushed back to queue "
+                              f"(total resumes={n_resumed_total})", flush=True)
+
                 except Exception as e:
                     print(f"Warning: batch_generate failed: {e}, falling back to sequential", flush=True)
                     import traceback
                     traceback.print_exc()
-                    for idx in batch_indices:
-                        item = prepared_list[idx]
-                        _label = item["block_info"].get("label", "")
+                    for orig_idx, prepared, label, _, _ in batch_items:
                         try:
                             result_str, _ = self.vlm_model.generate_from_prepared(
-                                item["prepared"], generation_config, block_label=_label
+                                prepared, generation_config, block_label=label
                             )
                         except Exception:
                             result_str = ""
-                        results[idx] = {"result": result_str}
+                        results[orig_idx] = {"result": result_str}
+
+            if n_resumed_total > 0 and _BATCH_VERBOSE:
+                print(f"    [VLM] Phase2 total resumed slots: {n_resumed_total}", flush=True)
         else:
             for idx, item in enumerate(prepared_list):
                 prepared = item["prepared"]

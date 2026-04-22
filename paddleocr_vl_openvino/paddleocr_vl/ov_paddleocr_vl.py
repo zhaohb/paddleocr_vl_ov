@@ -833,13 +833,11 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         merge_size = default_config.get("merge_size", 2)
         n_images = len(pil_images)
 
-        # 计算每张图的 patch 数和 token 数
+        # 计算每张图的 patch 数
         patches_per_image = []
-        tokens_per_image = []
         for thw in image_grid_thw:
             t, h, w = thw[0].item(), thw[1].item(), thw[2].item()
             patches_per_image.append(t * h * w)
-            tokens_per_image.append(t * (h // merge_size) * (w // merge_size))
 
         # 按 pixel_values 拆分每张图的 patches
         all_patches = []
@@ -848,8 +846,10 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             all_patches.append(pixel_values[offset:offset + n_patch])
             offset += n_patch
 
-        # 逐图 vision encoding（模型不支持多图 batch）
-        # 注意：vision_model 返回的 tensor 是 OV 输出 buffer 的 view，
+        # 逐图 vision encoding
+        # 注意：OV vision encoder 内部 Reshape 节点硬编码了 image_grid_thw
+        # 第一维=1，不支持多图 batch（即使 cu_seqlens 输入存在）。
+        # vision_model 返回的 tensor 是 OV 输出 buffer 的 view，
         # 下次调用会覆盖，必须 .clone() 保存副本。
         results = []
         for i in range(n_images):
@@ -945,6 +945,38 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             "rope_deltas": rope_deltas,
         }
 
+    def resume_prepared(self, original_prepared, generated_ids):
+        """
+        方案B: 从原始 prepared dict + 已生成 token 构建恢复后的 prepared dict。
+        将已生成 token 的 embeddings 拼接到原始 inputs_embeds 后面，
+        跳过 vision encoding 的重复计算。
+        """
+        gen_token_ids = torch.tensor([generated_ids], dtype=torch.long)
+        gen_embeds = self.llm_embd_run(gen_token_ids)  # [1, n_gen, hidden_dim]
+
+        orig_embeds = original_prepared["inputs_embeds"]  # [1, orig_len, hidden_dim]
+        new_embeds = torch.cat([orig_embeds, gen_embeds], dim=1)
+
+        orig_mask = original_prepared["attention_mask"]  # [1, orig_len]
+        gen_mask = torch.ones(1, len(generated_ids), dtype=orig_mask.dtype)
+        new_mask = torch.cat([orig_mask, gen_mask], dim=1)
+
+        # Generated tokens: sequential positions continuing after original sequence
+        orig_pos = original_prepared["position_ids"]  # [3, 1, orig_len]
+        rope_delta = original_prepared["rope_deltas"].item()
+        orig_len = orig_embeds.shape[1]
+        n_gen = len(generated_ids)
+        gen_offsets = torch.arange(n_gen, dtype=torch.long) + orig_len + rope_delta
+        gen_pos = gen_offsets.view(1, 1, n_gen).expand(3, 1, n_gen)
+        new_pos = torch.cat([orig_pos, gen_pos], dim=2)
+
+        return {
+            "inputs_embeds": new_embeds,
+            "attention_mask": new_mask,
+            "position_ids": new_pos,
+            "rope_deltas": original_prepared["rope_deltas"],
+        }
+
     @staticmethod
     def _apply_repetition_penalty(logits, generated_ids, penalty=1.5):
         """对已生成的 token 施加 repetition penalty，降低重复概率。"""
@@ -1012,7 +1044,9 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         eos_token_id: int = None,
         repetition_penalty: float = 1.0,
         block_labels: list = None,
-    ) -> list:
+        early_stop_ratio: float = 0.0,
+        prev_generated_ids: list = None,
+    ) -> tuple:
         """
         Slot-based batch inference：多个 prepared inputs 一起做 prefill + decode。
 
@@ -1082,9 +1116,14 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
 
         logits = torch.from_numpy(batch_request.get_tensor("logits").data)
 
-        # 初始化 decode 状态
+        # 初始化 decode 状态（含恢复：prev_generated_ids 累积到 generated_ids）
         past_lens = list(seq_lens)
-        generated_ids = [[] for _ in range(batch_size)]
+        generated_ids = []
+        prev_lens = []
+        for i in range(batch_size):
+            prev = prev_generated_ids[i] if prev_generated_ids and i < len(prev_generated_ids) else []
+            generated_ids.append(list(prev))
+            prev_lens.append(len(prev))
         finished = [False] * batch_size
 
         for i in range(batch_size):
@@ -1092,7 +1131,7 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
             row_logits = self._apply_repetition_penalty(row_logits, generated_ids[i], slot_penalties[i])
             next_token = row_logits.squeeze(0).argmax().item()
             generated_ids[i].append(next_token)
-            if next_token == eos_token_id:
+            if next_token == eos_token_id or len(generated_ids[i]) >= max_new_tokens:
                 finished[i] = True
 
         decode_times = []
@@ -1117,6 +1156,15 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
         for step in range(1, max_new_tokens):
             if all(finished):
                 break
+
+            # Early termination: 大部分 slot 已完成时提前结束，未完成的回填到下一批
+            if early_stop_ratio > 0:
+                n_fin = sum(finished)
+                if n_fin >= int(batch_size * early_stop_ratio) and n_fin < batch_size:
+                    if _BATCH_VERBOSE:
+                        print(f"    [BatchGen] Early stop at step={step}, "
+                              f"{n_fin}/{batch_size} finished", flush=True)
+                    break
 
             token_ids = []
             active_indices = []
@@ -1171,40 +1219,53 @@ class OVPaddleOCRVLForCausalLM(GenerationMixin):
                 next_token = row_logits.squeeze(0).argmax().item()
                 generated_ids[i].append(next_token)
 
-                if next_token == eos_token_id:
+                if next_token == eos_token_id or len(generated_ids[i]) >= max_new_tokens:
                     finished[i] = True
 
-        # 解码结果
+        # 解码结果（区分已完成 / 未完成 slot）
         total_steps = len(decode_times)
         if _BATCH_VERBOSE:
             print(f"    [BatchGen] Decode loop finished. Total steps={total_steps}, finished={finished}", flush=True)
         results = []
+        unfinished = []
         for i in range(batch_size):
-            output_ids = torch.tensor([generated_ids[i]], dtype=torch.long)
-            response = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
-
             n_output = len(generated_ids[i])
-            n_decode = n_output - 1  # first token from prefill
-            if n_decode > 0 and decode_times:
-                per_seq_decode = decode_times[:n_decode]
-                decode_avg = sum(per_seq_decode) / len(per_seq_decode)
-                total_decode_ms = sum(per_seq_decode)
-            else:
-                decode_avg = 0.0
-                total_decode_ms = 0.0
-            if _BATCH_VERBOSE:
-                print(f"    [BatchGen] slot{i}: output_tokens={n_output}, decode_steps={n_decode}, "
-                      f"decode_avg={decode_avg:.1f}ms/tok, total_decode={total_decode_ms:.1f}ms", flush=True)
+            n_new = n_output - prev_lens[i]
+            n_decode = n_new - 1  # first new token from prefill
 
-            token_stats = {
-                "output_tokens": n_output,
-                "first_token_latency_ms": _t_prefill,
-                "decode_avg_ms": decode_avg,
-                "total_decode_ms": total_decode_ms,
-            }
-            results.append((response, token_stats))
+            if finished[i]:
+                output_ids = torch.tensor([generated_ids[i]], dtype=torch.long)
+                response = self.tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0]
+
+                if n_decode > 0 and decode_times:
+                    per_seq_decode = decode_times[:n_decode]
+                    decode_avg = sum(per_seq_decode) / len(per_seq_decode)
+                    total_decode_ms = sum(per_seq_decode)
+                else:
+                    decode_avg = 0.0
+                    total_decode_ms = 0.0
+                if _BATCH_VERBOSE:
+                    print(f"    [BatchGen] slot{i}: output_tokens={n_output}, decode_steps={n_decode}, "
+                          f"decode_avg={decode_avg:.1f}ms/tok, total_decode={total_decode_ms:.1f}ms", flush=True)
+
+                token_stats = {
+                    "output_tokens": n_output,
+                    "first_token_latency_ms": _t_prefill,
+                    "decode_avg_ms": decode_avg,
+                    "total_decode_ms": total_decode_ms,
+                }
+                results.append((response, token_stats))
+            else:
+                if _BATCH_VERBOSE:
+                    print(f"    [BatchGen] slot{i}: UNFINISHED, {n_output} tokens "
+                          f"({n_new} new in this batch)", flush=True)
+                results.append((None, {"output_tokens": n_output, "unfinished": True}))
+                unfinished.append({
+                    "slot_index": i,
+                    "generated_ids": generated_ids[i],
+                })
 
         # 释放 batch infer request，避免跨次调用 KV cache 状态残留
         self._batch_request = None
 
-        return results
+        return results, unfinished
